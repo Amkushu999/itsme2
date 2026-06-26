@@ -70,6 +70,7 @@ object Camera2Hooks {
             hookImageReader(lpparam)
             hookSurfaceTexture(lpparam)
             hookSurfaceConstructor(lpparam)
+            hookSurfaceHolder(lpparam)
             hookOpenCamera(lpparam)
             hookCameraDeviceMethods(lpparam)
             hookCaptureSessionMethods(lpparam)
@@ -191,6 +192,42 @@ object Camera2Hooks {
                         val surface = param.thisObject as? Surface ?: return
                         surfaceDimensions[surface] = dims
                         Logger.d("$TAG Surface(SurfaceTexture) tracked: ${dims.first}x${dims.second}")
+                    }
+                }
+            )
+        }
+    }
+
+    /**
+     * Hook SurfaceHolder.setFixedSize(width, height) — SurfaceView path.
+     *
+     * Apps that use a SurfaceView (not TextureView) for camera preview call
+     * SurfaceHolder.setFixedSize() to set the preview resolution, then pass
+     * SurfaceHolder.getSurface() to createCaptureSession().  The internal
+     * implementation class is BaseSurfaceHolder.
+     *
+     * Without this hook, SurfaceView-based cameras fall back to the 1280×720
+     * default instead of using the app's actual configured resolution.
+     */
+    private fun hookSurfaceHolder(lpparam: XC_LoadPackage.LoadPackageParam) {
+        // BaseSurfaceHolder is the common concrete implementation
+        val cls = tryFindClass("com.android.internal.view.BaseSurfaceHolder", lpparam.classLoader)
+            ?: return
+        safeHook {
+            XposedHelpers.findAndHookMethod(
+                cls, "setFixedSize",
+                Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val w = param.args[0] as Int
+                        val h = param.args[1] as Int
+                        try {
+                            val surface = param.thisObject.javaClass
+                                .getMethod("getSurface").invoke(param.thisObject)
+                                    as? Surface ?: return
+                            surfaceDimensions[surface] = Triple(w, h, ImageFormat.YUV_420_888)
+                            Logger.d("$TAG SurfaceHolder.setFixedSize tracked: ${w}x${h}")
+                        } catch (_: Throwable) {}
                     }
                 }
             )
@@ -368,6 +405,29 @@ object Camera2Hooks {
             )
         }
 
+        // createConstrainedHighSpeedCaptureSession — used for slow-motion (120fps/240fps).
+        // This is a separate codepath from createCaptureSession.  Without this hook,
+        // a slow-motion recording attempt would reach the real HAL.
+        safeHook {
+            XposedHelpers.findAndHookMethod(
+                implClass, "createConstrainedHighSpeedCaptureSession",
+                List::class.java,
+                android.hardware.camera2.CameraCaptureSession.StateCallback::class.java,
+                Handler::class.java,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val dev = param.thisObject
+                        if (dev !in FakeCameraObjects.fakeCamera2Devices) return
+                        param.result = null
+                        val surfaces = (param.args[0] as? List<*>)?.filterNotNull() ?: return
+                        handleSessionCreation(
+                            dev, surfaces, param.args[1], param.args[2], lpparam.classLoader
+                        )
+                    }
+                }
+            )
+        }
+
         // createCaptureRequest(int templateType) → stub out a fake Builder
         safeHook {
             XposedHelpers.findAndHookMethod(implClass, "createCaptureRequest",
@@ -443,6 +503,22 @@ object Camera2Hooks {
         safeHook {
             XposedHelpers.findAndHookMethod(
                 implClass, "setRepeatingBurst",
+                List::class.java, captureCallbackClass, Handler::class.java,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (param.thisObject !in FakeCameraObjects.fakeCaptureSessionsMap) return
+                        param.result = 0
+                        val firstRequest = (param.args[0] as? List<*>)?.firstOrNull()
+                        FakeCameraObjects.startCaptureHeartbeat(param.thisObject, param.args[1], firstRequest)
+                    }
+                }
+            )
+        }
+
+        // captureBurst — bracketed burst capture (same block as setRepeatingBurst)
+        safeHook {
+            XposedHelpers.findAndHookMethod(
+                implClass, "captureBurst",
                 List::class.java, captureCallbackClass, Handler::class.java,
                 object : XC_MethodHook() {
                     override fun beforeHookedMethod(param: MethodHookParam) {

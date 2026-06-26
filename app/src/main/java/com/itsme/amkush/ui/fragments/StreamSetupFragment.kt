@@ -26,20 +26,62 @@ private val TextMid = Color(0x88FFFFFF)
 private val Border  = Color(0x26FFFFFF)
 private val Surface = Color(0x1AFFFFFF)
 
-private data class Protocol(val id: String, val label: String, val hint: String)
-private val PROTOCOLS = listOf(
-    Protocol("hls",    "HLS",    ".m3u8"),
-    Protocol("rtmp",   "RTMP",   "rtmp://"),
-    Protocol("rtsp",   "RTSP",   "rtsp://"),
-    Protocol("dash",   "DASH",   ".mpd"),
-    Protocol("rtp",    "RTP",    "rtp://"),
-    Protocol("udp",    "UDP",    "udp://"),
-    Protocol("srt",    "SRT",    "srt://"),
-    Protocol("mms",    "MMS",    "mms://"),
-    Protocol("ftp",    "FTP",    "ftp://"),
-    Protocol("http",   "HTTP",   "http(s)://"),
-    Protocol("direct", "Direct", "mp4/webm"),
+private data class Protocol(
+    val id: String,
+    val label: String,
+    val hint: String,
+    /** URL scheme prefix, or null for formats that don't need one (HLS .m3u8, Direct files). */
+    val scheme: String? = null
 )
+
+private val PROTOCOLS = listOf(
+    Protocol("hls",    "HLS",    ".m3u8",    scheme = null),    // URL may be http(s):// with .m3u8 suffix
+    Protocol("rtmp",   "RTMP",   "rtmp://",  scheme = "rtmp"),
+    Protocol("rtsp",   "RTSP",   "rtsp://",  scheme = "rtsp"),
+    Protocol("dash",   "DASH",   ".mpd",     scheme = null),    // URL is http(s):// with .mpd suffix
+    Protocol("rtp",    "RTP",    "rtp://",   scheme = "rtp"),
+    Protocol("udp",    "UDP",    "udp://",   scheme = "udp"),
+    Protocol("srt",    "SRT",    "srt://",   scheme = "srt"),
+    Protocol("mms",    "MMS",    "mms://",   scheme = "mms"),
+    Protocol("ftp",    "FTP",    "ftp://",   scheme = "ftp"),
+    Protocol("http",   "HTTP",   "http(s)://", scheme = "http"),
+    Protocol("direct", "Direct", "mp4/webm", scheme = null),    // local file path
+)
+
+/**
+ * Infer which Protocol best matches a stored URL when the app restarts.
+ * Falls back to "hls" if no match found.
+ */
+private fun inferProtocolId(url: String): String {
+    if (url.isEmpty()) return "hls"
+    return when {
+        url.startsWith("rtsp://",  ignoreCase = true) -> "rtsp"
+        url.startsWith("rtmp://",  ignoreCase = true) -> "rtmp"
+        url.startsWith("srt://",   ignoreCase = true) -> "srt"
+        url.startsWith("udp://",   ignoreCase = true) -> "udp"
+        url.startsWith("rtp://",   ignoreCase = true) -> "rtp"
+        url.startsWith("mms://",   ignoreCase = true) -> "mms"
+        url.startsWith("ftp://",   ignoreCase = true) -> "ftp"
+        url.endsWith(".m3u8",      ignoreCase = true) -> "hls"
+        url.endsWith(".mpd",       ignoreCase = true) -> "dash"
+        url.startsWith("http://",  ignoreCase = true) -> "http"
+        url.startsWith("https://", ignoreCase = true) -> "http"
+        url.startsWith("/") || !url.contains("://")   -> "direct"
+        else -> "hls"
+    }
+}
+
+/**
+ * If the user typed a bare host or path without a scheme, auto-prefix
+ * the selected protocol's scheme so FFmpeg can identify the demuxer.
+ * URLs that already contain "://" are left unchanged.
+ */
+private fun autoPrefixScheme(url: String, protocol: Protocol): String {
+    if (url.isBlank()) return url
+    if (url.contains("://")) return url                        // already has scheme
+    if (protocol.scheme == null) return url                    // hls/dash/direct — keep as-is
+    return "${protocol.scheme}://$url"
+}
 
 @Composable
 fun StreamSetupContent(
@@ -51,27 +93,36 @@ fun StreamSetupContent(
     val context = LocalContext.current
     var input    by remember { mutableStateOf(initialUrl) }
     var savedUrl by remember { mutableStateOf(initialUrl) }
-    var protocol by remember { mutableStateOf("hls") }
+    // Infer the protocol from whatever URL is already stored so the right button
+    // is highlighted when the screen opens, instead of always defaulting to HLS.
+    var protocol by remember { mutableStateOf(inferProtocolId(initialUrl)) }
     var saved    by remember { mutableStateOf(false) }
     var isInjecting by remember { mutableStateOf(InjectionService.isRunning) }
 
     LaunchedEffect(Unit) {
         val stored = SharedPrefs.getStreamUrl() ?: ""
         if (stored.isNotEmpty()) {
-            input = stored
+            input    = stored
             savedUrl = stored
+            // Keep the protocol selector in sync with the stored URL
+            protocol = inferProtocolId(stored)
         }
     }
 
     fun handleSave() {
-        val url = input.trim()
-        if (url.isEmpty()) {
+        val rawUrl = input.trim()
+        if (rawUrl.isEmpty()) {
             Toast.makeText(context, "Please enter a stream URL", Toast.LENGTH_SHORT).show()
             return
         }
+        // Auto-prefix the scheme if the user typed a bare host/path
+        val proto = PROTOCOLS.find { it.id == protocol }
+        val url   = autoPrefixScheme(rawUrl, proto ?: PROTOCOLS.first())
+        // Reflect any auto-prefix back into the text field
+        if (url != rawUrl) input = url
         savedUrl = url
         SharedPrefs.setStreamUrl(url)
-        SharedPrefs.setStreamType(PROTOCOLS.find { it.id == protocol }?.label ?: protocol)
+        SharedPrefs.setStreamType(proto?.label ?: protocol)
         onSaved(url)
         saved = true
     }
@@ -84,11 +135,17 @@ fun StreamSetupContent(
     }
 
     fun startInjection() {
-        val url = input.trim()
-        if (url.isEmpty()) {
+        val rawUrl = input.trim()
+        if (rawUrl.isEmpty()) {
             Toast.makeText(context, "Configure a stream URL first", Toast.LENGTH_SHORT).show()
             return
         }
+        // Apply the same auto-prefix logic as handleSave so FFmpeg always
+        // receives a well-formed URL regardless of which button the user taps first.
+        val proto  = PROTOCOLS.find { it.id == protocol }
+        val url    = autoPrefixScheme(rawUrl, proto ?: PROTOCOLS.first())
+        if (url != rawUrl) input = url   // update field to show the prefixed URL
+
         val pkg = targetPackage ?: SharedPrefs.getTargetPackage()
         if (pkg.isNullOrEmpty()) {
             Toast.makeText(context, "No target app selected", Toast.LENGTH_LONG).show()

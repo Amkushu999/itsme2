@@ -294,6 +294,22 @@ object Camera1Hooks {
                 }
             )
         } catch (e: Throwable) { Logger.d("$TAG setPreviewCallbackWithBuffer: ${e.message}") }
+
+        // addCallbackBuffer — apps that use setPreviewCallbackWithBuffer must supply
+        // byte[] buffers via addCallbackBuffer().  Without a no-op the native call
+        // would crash on the fake Camera instance.  We discard the buffer; our
+        // heartbeat thread supplies its own NV21 frames.
+        try {
+            XposedHelpers.findAndHookMethod(camClass, "addCallbackBuffer",
+                ByteArray::class.java,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (param.thisObject !in FakeCameraObjects.fakeCamera1Instances) return
+                        param.result = null  // discard — we supply our own NV21 frames
+                    }
+                }
+            )
+        } catch (e: Throwable) { Logger.d("$TAG addCallbackBuffer: ${e.message}") }
     }
 
     private fun hookSetOneShotPreviewCallback(camClass: Class<*>) {
@@ -378,6 +394,8 @@ object Camera1Hooks {
     // ── takePicture ───────────────────────────────────────────────────────────
 
     private fun hookTakePicture(camClass: Class<*>) {
+        // 4-arg overload: takePicture(shutter, raw, postview, jpeg)
+        // jpeg is args[3]
         try {
             XposedHelpers.findAndHookMethod(camClass, "takePicture",
                 Camera.ShutterCallback::class.java,
@@ -400,7 +418,32 @@ object Camera1Hooks {
                     }
                 }
             )
-        } catch (e: Throwable) { Logger.d("$TAG takePicture: ${e.message}") }
+        } catch (e: Throwable) { Logger.d("$TAG takePicture(4-arg): ${e.message}") }
+
+        // 3-arg overload: takePicture(shutter, raw, jpeg)  ← most common in real apps
+        // jpeg is args[2]. Without this hook, 3-arg calls reach native and crash.
+        try {
+            XposedHelpers.findAndHookMethod(camClass, "takePicture",
+                Camera.ShutterCallback::class.java,
+                Camera.PictureCallback::class.java,
+                Camera.PictureCallback::class.java,
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        val fake = param.thisObject
+                        if (fake !in FakeCameraObjects.fakeCamera1Instances) return
+                        param.result = null
+                        val shutterCb = param.args[0] as? Camera.ShutterCallback
+                        val jpegCb    = param.args[2] as? Camera.PictureCallback ?: return
+                        val state     = camStates[fake] ?: Cam1State()
+                        uiHandler.postDelayed({
+                            shutterCb?.onShutter()
+                            val jpeg = buildFakeJpeg(state) ?: return@postDelayed
+                            jpegCb.onPictureTaken(jpeg, fake as? Camera)
+                        }, 200)
+                    }
+                }
+            )
+        } catch (e: Throwable) { Logger.d("$TAG takePicture(3-arg): ${e.message}") }
     }
 
     // ── release ───────────────────────────────────────────────────────────────
@@ -426,7 +469,7 @@ object Camera1Hooks {
         } catch (e: Throwable) { Logger.d("$TAG release: ${e.message}") }
     }
 
-    // ── autoFocus ─────────────────────────────────────────────────────────────
+    // ── autoFocus / cancelAutoFocus ───────────────────────────────────────────
 
     private fun hookAutoFocus(camClass: Class<*>) {
         try {
@@ -443,6 +486,19 @@ object Camera1Hooks {
                 }
             )
         } catch (e: Throwable) { Logger.d("$TAG autoFocus: ${e.message}") }
+
+        // cancelAutoFocus — apps must call this after autoFocus() before stopPreview().
+        // Without the no-op, the native call would crash on the fake instance.
+        try {
+            XposedHelpers.findAndHookMethod(camClass, "cancelAutoFocus",
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (param.thisObject !in FakeCameraObjects.fakeCamera1Instances) return
+                        param.result = null  // no-op
+                    }
+                }
+            )
+        } catch (e: Throwable) { Logger.d("$TAG cancelAutoFocus: ${e.message}") }
     }
 
     // ── getNumberOfCameras ────────────────────────────────────────────────────

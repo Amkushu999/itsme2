@@ -134,16 +134,31 @@ fun StreamPreviewDialog(url: String, onDismiss: () -> Unit) {
 
         // ── FFmpeg Kit session: decode stream → RGBA rawvideo → pipe ──
         //
-        // Flags used:
-        //   -rtsp_transport tcp  — prefer TCP for RTSP (avoids UDP packet loss)
+        // Protocol-specific input flags are chosen from the URL scheme so that
+        // non-RTSP protocols don't receive RTSP-only options (which FFmpeg would
+        // reject or silently mishandle in some builds).
+        //
+        // Common flags:
         //   -fflags +nobuffer    — minimal buffering for live streams
         //   -flags low_delay     — reduce latency
         //   -f rawvideo          — raw uncompressed output (no container overhead)
         //   -pix_fmt rgba        — Android ARGB_8888 compatible byte layout
-        //   -s WxH               — scale to preview resolution
+        //   -vf scale=WxH        — scale to preview resolution
         //   -r 30                — cap output rate so slow devices don't drop frames
-        val cmd = "-rtsp_transport tcp " +
-                  "-fflags +nobuffer -flags low_delay " +
+        //
+        // Protocol-specific flags:
+        //   RTSP  → -rtsp_transport tcp      (avoid UDP packet loss)
+        //   SRT   → -protocol_whitelist      (SRT needs explicit whitelist)
+        //   UDP/RTP → -protocol_whitelist    (raw UDP/RTP needs whitelist)
+        //   HLS/HTTP/RTMP/others → no special input flags needed
+        val scheme = url.substringBefore("://").lowercase().trimStart('-')
+        val inputFlags = when (scheme) {
+            "rtsp"       -> "-rtsp_transport tcp "
+            "srt"        -> "-protocol_whitelist file,crypto,data,srt,udp "
+            "udp", "rtp" -> "-protocol_whitelist file,crypto,data,udp,rtp "
+            else         -> ""   // hls, http, https, rtmp, mms, ftp — no special flags
+        }
+        val cmd = "${inputFlags}-fflags +nobuffer -flags low_delay " +
                   "-i \"$url\" " +
                   "-vf scale=$PREVIEW_W:$PREVIEW_H " +
                   "-f rawvideo -pix_fmt rgba -r 30 " +
