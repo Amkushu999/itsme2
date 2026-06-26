@@ -51,23 +51,34 @@ private val PROTOCOLS = listOf(
 /**
  * Infer which Protocol best matches a stored URL when the app restarts.
  * Falls back to "hls" if no match found.
+ *
+ * Handles scheme-prefixed URLs (rtsp://, srt://, etc.) and also recognises
+ * common scheme-less patterns like "host:port/path" as likely RTSP so that
+ * the correct button is highlighted and autoPrefixScheme() can add the scheme.
  */
 private fun inferProtocolId(url: String): String {
     if (url.isEmpty()) return "hls"
+    val lower = url.lowercase()
     return when {
-        url.startsWith("rtsp://",  ignoreCase = true) -> "rtsp"
-        url.startsWith("rtmp://",  ignoreCase = true) -> "rtmp"
-        url.startsWith("srt://",   ignoreCase = true) -> "srt"
-        url.startsWith("udp://",   ignoreCase = true) -> "udp"
-        url.startsWith("rtp://",   ignoreCase = true) -> "rtp"
-        url.startsWith("mms://",   ignoreCase = true) -> "mms"
-        url.startsWith("ftp://",   ignoreCase = true) -> "ftp"
-        url.endsWith(".m3u8",      ignoreCase = true) -> "hls"
-        url.endsWith(".mpd",       ignoreCase = true) -> "dash"
-        url.startsWith("http://",  ignoreCase = true) -> "http"
-        url.startsWith("https://", ignoreCase = true) -> "http"
-        url.startsWith("/") || !url.contains("://")   -> "direct"
-        else -> "hls"
+        lower.startsWith("rtsp://")  -> "rtsp"
+        lower.startsWith("rtmp://")  -> "rtmp"
+        lower.startsWith("srt://")   -> "srt"
+        lower.startsWith("udp://")   -> "udp"
+        lower.startsWith("rtp://")   -> "rtp"
+        lower.startsWith("mms://")   -> "mms"
+        lower.startsWith("ftp://")   -> "ftp"
+        lower.startsWith("https://") -> "http"
+        lower.startsWith("http://")  -> "http"
+        lower.endsWith(".m3u8") || lower.contains(".m3u8?") -> "hls"
+        lower.endsWith(".mpd")  || lower.contains(".mpd?")  -> "dash"
+        lower.startsWith("/")   -> "direct"           // absolute local file path
+        // Scheme-less "host:port/path" patterns — most likely RTSP for camera tools.
+        // Port numbers used by common streaming protocols:
+        //   554 / 8554 → RTSP    1935 → RTMP    9000-9999 → often SRT/UDP
+        url.contains("://")     -> "hls"              // unknown scheme → hls fallback
+        // host:port pattern without scheme — guess RTSP (most common for IP cameras)
+        url.matches(Regex("""[^/\s]+:\d{2,5}(/.*)?""")) -> "rtsp"
+        else                    -> "hls"
     }
 }
 
