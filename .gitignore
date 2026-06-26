@@ -1,0 +1,38 @@
+# Built application files
+*.apk
+*.ap_
+*.aab
+
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+build/
+.gradle/
+.idea/
+*.iml
+*.iws
+*.ipr
+*.swp
+*.swo
+
+# Local configuration
+local.properties
+
+# Keystore files
+*.jks
+*.keystore
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Log files
+*.log
+
+# Python cache
+__pycache__/
+*.pyc

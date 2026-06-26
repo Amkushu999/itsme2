@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Permissions -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"
+        tools:ignore="QueryAllPackagesPermission" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".FaceGateApplication"
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.AppCompat.NoActionBar"
+        android:usesCleartextTraffic="false"
+        android:networkSecurityConfig="@xml/network_security_config"
+        tools:targetApi="35">
+
+        <!-- Xposed Module Metadata -->
+        <meta-data
+            android:name="xposedmodule"
+            android:value="true" />
+        <meta-data
+            android:name="xposeddescription"
+            android:value="FaceGate - GStreamer Virtual Camera" />
+        <meta-data
+            android:name="xposedminversion"
+            android:value="89" />
+
+        <!-- ==================== ACTIVITIES ==================== -->
+
+        <!-- Splash Screen - Launcher -->
+        <activity
+            android:name=".ui.SplashScreenActivity"
+            android:exported="true"
+            android:theme="@style/Theme.AppCompat.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Home Screen -->
+        <activity
+            android:name=".ui.HomeScreen"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.NoActionBar"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!-- Payment Screen -->
+        <activity
+            android:name=".ui.PaymentScreen"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
+
+        <!-- Tabs Screen (Main App) -->
+        <activity
+            android:name=".ui.TabsScreen"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
+
+        <!-- ==================== SERVICES ==================== -->
+
+        <service
+            android:name=".services.InjectionService"
+            android:exported="true"
+            android:foregroundServiceType="mediaPlayback|camera|dataSync"
+            android:enabled="true">
+            <!--
+                Explicit action so Xposed hooks in hooked-app processes can bind via:
+                    Intent("com.itsme.amkush.action.SURFACE_INJECTOR").setPackage("com.itsme.amkush")
+                The setPackage() restriction means only code that already knows the
+                module package name can bind — no open exposure to arbitrary apps.
+            -->
+            <intent-filter>
+                <action android:name="com.itsme.amkush.action.SURFACE_INJECTOR" />
+            </intent-filter>
+        </service>
+
+        <!-- ==================== IPC CONFIG PROVIDER ==================== -->
+
+        <!-- Exposes injection config cross-process so Xposed hooks can read it -->
+        <provider
+            android:name=".ipc.FaceGateIpcProvider"
+            android:authorities="com.itsme.amkush.ipc"
+            android:exported="true"
+            android:enabled="true" />
+
+        <!-- ==================== FILE PROVIDER ==================== -->
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
+    </application>
+
+</manifest>

@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App Name -->
+    <string name="app_name">FaceGate</string>
+
+    <!-- ===== PAYMENT SCREEN ===== -->
+    <string name="activate_key">ACTIVATE KEY</string>
+    <string name="enter_license_key">Enter your license key to unlock</string>
+    <string name="target_locked">TARGET LOCKED</string>
+    <string name="device_id">DEVICE ID</string>
+    <string name="tap_to_copy">TAP TO COPY</string>
+    <string name="facegate_bot">FACEGATE BOT</string>
+    <string name="buy_key_from_bot">Buy key from bot</string>
+    <string name="visit_bot">1. Visit bot</string>
+    <string name="view_pricing">2. View pricing</string>
+    <string name="buy_receive_key">3. Buy &amp; receive key from bot</string>
+    <string name="use_key_to_activate">4. Use the key to activate</string>
+    <string name="enter_activation_key">Enter activation key...</string>
+    <string name="activate_key_button">ACTIVATE KEY</string>
+
+    <!-- ===== HOME SCREEN ===== -->
+    <string name="home_title">FaceGate</string>
+    <string name="select_target_app">Select target app</string>
+    <string name="lock_target">LOCK TARGET</string>
+    <string name="search_apps">Search apps...</string>
+    <string name="no_apps_found">No apps found</string>
+
+    <!-- ===== TABS SCREEN ===== -->
+    <string name="tab_home">Home</string>
+    <string name="tab_stream">Stream</string>
+    <string name="tab_deny">Deny</string>
+    <string name="tab_media">Media</string>
+    <string name="tab_stats">Stats</string>
+    <string name="tab_settings">Settings</string>
+
+    <!-- ===== STREAM FRAGMENT ===== -->
+    <string name="stream_configuration">Stream Configuration</string>
+    <string name="enter_stream_url">Enter your stream URL</string>
+    <string name="paste_stream_url">Paste stream URL...</string>
+    <string name="save_apply">Save &amp; Apply</string>
+    <string name="injection_controls">Injection Controls</string>
+    <string name="status_ready">⏳ Ready</string>
+    <string name="start_injection">Start Injection</string>
+    <string name="stop_injection">Stop Injection</string>
+    <string name="injection_note">Note: Injection will start when the target app opens the camera</string>
+    <string name="target_format">🎯 Target: %s</string>
+    <string name="injection_active">✅ Injection Active</string>
+    <string name="status_ready_inject">⏳ Ready to inject</string>
+    <string name="status_upload_first">⏳ Upload media first</string>
+    <string name="enter_stream_url_error">Please enter a stream URL</string>
+    <string name="invalid_url">Invalid URL format</string>
+    <string name="stream_saved">Stream URL saved!</string>
+    <string name="configure_stream_first">Please configure a stream URL first</string>
+    <string name="no_target_selected">No target app selected. Go back and select one.</string>
+    <string name="injection_started">Injection started for %s</string>
+    <string name="injection_stopped">Injection stopped</string>
+
+    <!-- ===== MEDIA FRAGMENT ===== -->
+    <string name="media_title">Local Media</string>
+    <string name="media_subtitle">Upload a video or image for injection</string>
+    <string name="upload_media">Upload Media</string>
+    <string name="video_prefix">🎬 %s</string>
+    <string name="media_selected">Media selected</string>
+    <string name="unknown_file">Unknown</string>
+    <string name="upload_media_first">Please upload a video or image first</string>
+    <string name="media_selected_format">Media selected: %s</string>
+    <string name="media_cleared">Media cleared</string>
+    <string name="no_media_selected_error">No media selected</string>
+    <string name="supported_formats">Supported: MP4, AVI, MKV, JPG, PNG, GIF</string>
+    <string name="clear">Clear</string>
+
+    <!-- ===== STATS FRAGMENT ===== -->
+    <string name="stats_title">Stream Statistics</string>
+    <string name="stats_subtitle">Real-time diagnostics</string>
+    <string name="status_idle">⏳ Idle</string>
+    <string name="status_connecting">Connecting...</string>
+    <string name="status_live">LIVE</string>
+    <string name="status_error">Stream error</string>
+    <string name="bitrate">Bitrate</string>
+    <string name="bitrate_format">%.1f kbps</string>
+    <string name="buffer_health">Buffer Health</string>
+    <string name="percent_format">%d%%</string>
+    <string name="latency">Latency</string>
+    <string name="ms_format">%d ms</string>
+    <string name="fps">FPS</string>
+    <string name="fps_format">%d FPS</string>
+    <string name="resolution" formatted="false">Resolution</string>
+    <string name="resolution_format" formatted="false">%dx%d</string>
+    <string name="uptime">Uptime</string>
+    <string name="uptime_days" formatted="false">%dd %dh %dm</string>
+    <string name="uptime_hours" formatted="false">%dh %dm</string>
+    <string name="uptime_minutes">%dm</string>
+    <string name="frame_count">Frames</string>
+    <string name="decoder_type">Decoder</string>
+
+    <!-- ===== SETTINGS / DEVICE SPOOF ===== -->
+    <string name="device_spoofing_title">Device Spoofing</string>
+    <string name="device_spoofing_subtitle">Spoof device info for target app</string>
+    <string name="current_device_info">Current Device Info</string>
+    <string name="model">Model</string>
+    <string name="brand">Brand</string>
+    <string name="manufacturer">Manufacturer</string>
+    <string name="android_version">Android</string>
+    <string name="build_id">Build ID</string>
+    <string name="security_patch">Security Patch</string>
+    <string name="apply_spoof">Apply Spoof</string>
+    <string name="reset">Reset</string>
+    <string name="spoof_active">✅ Spoof active</string>
+    <string name="spoof_inactive">⏳ Spoof inactive</string>
+    <string name="enter_at_least_one">Please enter at least one spoof value</string>
+    <string name="device_id_hint">Device ID e.g. 4743-4E9A-E9D7-B22A</string>
+    <string name="serial_hint">Serial Number</string>
+    <string name="spoof_applied">Device spoof applied!</string>
+    <string name="spoof_reset">Spoof reset to device defaults</string>
+    <string name="spoof_note">Note: Spoofing only applies to the target app</string>
+
+    <!-- ===== DENY LIST ===== -->
+    <string name="deny_list_title">Deny List</string>
+    <string name="deny_list_subtitle">Apps hidden from the target</string>
+    <string name="search_deny_list">Search apps...</string>
+
+    <!-- ===== DIALOGS ===== -->
+    <string name="close">Close</string>
+    <string name="connecting">Connecting...</string>
+    <string name="buffering">Buffering stream...</string>
+    <string name="unable_to_play">Unable to play stream</string>
+    <string name="no_url">No URL</string>
+    <string name="live">LIVE</string>
+    <string name="stream_preview">Stream Preview</string>
+
+    <!-- ===== ERRORS ===== -->
+    <string name="error_occurred">An error occurred</string>
+    <string name="network_error">Network error</string>
+    <string name="permission_required">Permission required</string>
+    <string name="permission_denied">Permission denied</string>
+</resources>
