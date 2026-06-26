@@ -106,8 +106,9 @@ object AntiXposedHooks {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         val className = param.args[0] as? String ?: return
                         if (xposedClassNames.any { className.contains(it) }) {
-                            param.result = null
-                            Logger.d("Blocked Class.forName: $className")
+                            // Must throw, not return null — Class.forName contract requires
+                            // either a non-null Class or ClassNotFoundException.
+                            throw ClassNotFoundException(className)
                         }
                     }
                 }
@@ -123,8 +124,7 @@ object AntiXposedHooks {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         val className = param.args[0] as? String ?: return
                         if (xposedClassNames.any { className.contains(it) }) {
-                            param.result = null
-                            Logger.d("Blocked Class.forName with loader: $className")
+                            throw ClassNotFoundException(className)
                         }
                     }
                 }
@@ -290,8 +290,8 @@ object AntiXposedHooks {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         val className = param.args[0] as? String ?: return
                         if (xposedClassNames.any { className.contains(it) }) {
-                            param.result = null
-                            Logger.d("Blocked ClassLoader.loadClass: $className")
+                            // loadClass contract: must throw ClassNotFoundException, not return null.
+                            throw ClassNotFoundException(className)
                         }
                     }
                 }
@@ -306,8 +306,7 @@ object AntiXposedHooks {
                     override fun beforeHookedMethod(param: MethodHookParam) {
                         val className = param.args[0] as? String ?: return
                         if (xposedClassNames.any { className.contains(it) }) {
-                            param.result = null
-                            Logger.d("Blocked ClassLoader.loadClass with resolve: $className")
+                            throw ClassNotFoundException(className)
                         }
                     }
                 }

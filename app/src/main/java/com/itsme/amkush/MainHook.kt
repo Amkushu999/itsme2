@@ -18,54 +18,13 @@ package com.itsme.amkush
           Logger.init(true)
           Logger.d("Loading package: ${lpparam.packageName}")
 
+          // Only hook Application.onCreate here.  All camera / anti-detection hooks are
+          // installed inside hookApplication()'s afterHookedMethod callback, AFTER we
+          // confirm this is the target package and set isHookingActive = true.
+          //
+          // Previously every hook was installed in every app process at handleLoadPackage
+          // time, paying significant JNI overhead on the entire device.
           hookApplication(lpparam)
-
-          // ==================== CAMERA HOOKS (FFmpeg native architecture) ====================
-          // Camera2Hooks: blocks physical camera open, returns fake proxies, routes surfaces.
-          // Camera1Hooks: same for android.hardware.Camera API.
-          // CameraXHooks: wraps CameraX analyzer; Camera2 block covers physical camera.
-          // All three operate in the hooked target-app process.
-          // Actual stream decoding (FFmpeg JNI) and frame writing happen in InjectionService.
-          try { Camera1Hooks.hookAll(lpparam); Logger.d("Camera1 hooks installed") }
-          catch (e: Throwable) { Logger.e("Camera1 hooks failed", e) }
-
-          try { Camera2Hooks.hookAll(lpparam); Logger.d("Camera2 hooks installed") }
-          catch (e: Throwable) { Logger.e("Camera2 hooks failed", e) }
-
-          try { CameraXHooks.hookAll(lpparam); Logger.d("CameraX hooks installed") }
-          catch (e: Throwable) { Logger.e("CameraX hooks failed", e) }
-
-          // ==================== EXIF SPOOFING ====================
-          try { ExifSpoofHooks.hookAll(lpparam); Logger.d("EXIF spoof hooks installed") }
-          catch (e: Throwable) { Logger.e("EXIF spoof hooks failed", e) }
-
-          // ==================== INTENT CAPTURE HOOKS ====================
-          try { IntentCaptureHooks.hookAll(lpparam); Logger.d("Intent capture hooks installed") }
-          catch (e: Throwable) { Logger.e("Intent capture hooks failed", e) }
-
-          // ==================== DEVICE SPOOFING ====================
-          try { DeviceSpoofHooks.hookAll(lpparam); Logger.d("Device spoof hooks installed") }
-          catch (e: Throwable) { Logger.e("Device spoof hooks failed", e) }
-
-          // ==================== DENY LIST ====================
-          try { DenyListHooks.hookAll(lpparam); Logger.d("Deny list hooks installed") }
-          catch (e: Throwable) { Logger.e("Deny list hooks failed", e) }
-
-          // ==================== ANTI-DETECTION HOOKS ====================
-          try { EmulatorBypassHooks.hookAll(lpparam); Logger.d("Emulator bypass hooks installed") }
-          catch (e: Throwable) { Logger.e("Emulator bypass hooks failed", e) }
-
-          try { RootBypassHooks.hookAll(lpparam); Logger.d("Root bypass hooks installed") }
-          catch (e: Throwable) { Logger.e("Root bypass hooks failed", e) }
-
-          try { AntiXposedHooks.hookAll(lpparam); Logger.d("Anti-Xposed hooks installed") }
-          catch (e: Throwable) { Logger.e("Anti-Xposed hooks failed", e) }
-
-          try { SELinuxBypassHooks.hookAll(lpparam); Logger.d("SELinux bypass hooks installed") }
-          catch (e: Throwable) { Logger.e("SELinux bypass hooks failed", e) }
-
-          try { ClonerBypassHooks.hookAll(lpparam); Logger.d("Cloner bypass hooks installed") }
-          catch (e: Throwable) { Logger.e("Cloner bypass hooks failed", e) }
       }
 
       // ── hookApplication ───────────────────────────────────────────────────────
@@ -121,6 +80,53 @@ package com.itsme.amkush
                           } catch (e: Throwable) {
                               Logger.e("ConfigUpdateReceiver registration failed", e)
                           }
+
+                          // ── Install all feature hooks now, only for the target process ──
+                          // Xposed allows findAndHookMethod to be called at any time after
+                          // handleLoadPackage; hooks installed here are still effective for all
+                          // future calls since Camera APIs are always called after Application.onCreate.
+                          //
+                          // Camera hooks (FFmpeg native architecture):
+                          try { Camera1Hooks.hookAll(lpparam); Logger.d("Camera1 hooks installed") }
+                          catch (e: Throwable) { Logger.e("Camera1 hooks failed", e) }
+
+                          try { Camera2Hooks.hookAll(lpparam); Logger.d("Camera2 hooks installed") }
+                          catch (e: Throwable) { Logger.e("Camera2 hooks failed", e) }
+
+                          try { CameraXHooks.hookAll(lpparam); Logger.d("CameraX hooks installed") }
+                          catch (e: Throwable) { Logger.e("CameraX hooks failed", e) }
+
+                          // EXIF spoofing:
+                          try { ExifSpoofHooks.hookAll(lpparam); Logger.d("EXIF spoof hooks installed") }
+                          catch (e: Throwable) { Logger.e("EXIF spoof hooks failed", e) }
+
+                          // Intent capture replacement:
+                          try { IntentCaptureHooks.hookAll(lpparam); Logger.d("Intent capture hooks installed") }
+                          catch (e: Throwable) { Logger.e("Intent capture hooks failed", e) }
+
+                          // Device spoofing:
+                          try { DeviceSpoofHooks.hookAll(lpparam); Logger.d("Device spoof hooks installed") }
+                          catch (e: Throwable) { Logger.e("Device spoof hooks failed", e) }
+
+                          // Deny list:
+                          try { DenyListHooks.hookAll(lpparam); Logger.d("Deny list hooks installed") }
+                          catch (e: Throwable) { Logger.e("Deny list hooks failed", e) }
+
+                          // Anti-detection:
+                          try { EmulatorBypassHooks.hookAll(lpparam); Logger.d("Emulator bypass hooks installed") }
+                          catch (e: Throwable) { Logger.e("Emulator bypass hooks failed", e) }
+
+                          try { RootBypassHooks.hookAll(lpparam); Logger.d("Root bypass hooks installed") }
+                          catch (e: Throwable) { Logger.e("Root bypass hooks failed", e) }
+
+                          try { AntiXposedHooks.hookAll(lpparam); Logger.d("Anti-Xposed hooks installed") }
+                          catch (e: Throwable) { Logger.e("Anti-Xposed hooks failed", e) }
+
+                          try { SELinuxBypassHooks.hookAll(lpparam); Logger.d("SELinux bypass hooks installed") }
+                          catch (e: Throwable) { Logger.e("SELinux bypass hooks failed", e) }
+
+                          try { ClonerBypassHooks.hookAll(lpparam); Logger.d("Cloner bypass hooks installed") }
+                          catch (e: Throwable) { Logger.e("Cloner bypass hooks failed", e) }
 
                           // NOTE: No decoder is started here.
                           // The FFmpeg pipeline runs in the MODULE PROCESS (InjectionService).

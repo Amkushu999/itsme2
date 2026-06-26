@@ -12,7 +12,9 @@ import com.itsme.amkush.network.models.TokenRequest
 import com.itsme.amkush.utils.DeviceUtils
 import com.itsme.amkush.utils.Logger
 import com.itsme.amkush.utils.SharedPrefs
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class HomeViewModel(private val context: Context) : ViewModel() {
 
@@ -48,22 +50,25 @@ class HomeViewModel(private val context: Context) : ViewModel() {
             return
         }
 
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             try {
                 val apiService = ApiClient.getApiService()
                 val deviceId = DeviceUtils.getDeviceId(context)
                 val request = TokenRequest(token, deviceId)
                 val response = apiService.verifyToken(request).execute()
 
+                // Use postValue (thread-safe) instead of value= (main-thread only).
+                // The coroutine runs on Dispatchers.IO so .value= would throw
+                // IllegalStateException ("Cannot invoke setValue on a background thread").
                 if (response.isSuccessful && response.body()?.valid == true) {
-                    _tokenStatus.value = Response.Success(true)
+                    _tokenStatus.postValue(Response.Success(true))
                 } else {
-                    _tokenStatus.value = Response.Error("Invalid token")
                     SharedPrefs.clearActivation()
+                    _tokenStatus.postValue(Response.Error("Invalid token"))
                 }
             } catch (e: Exception) {
                 Logger.e("Error checking token", e)
-                _tokenStatus.value = Response.Error("Network error")
+                _tokenStatus.postValue(Response.Error("Network error"))
             }
         }
     }

@@ -20,14 +20,15 @@ object ExifSpoofHooks {
 
     private const val TAG = "FaceGate"
 
-    // Cache for real device GPS
-    private var cachedLatitude: String? = null
-    private var cachedLongitude: String? = null
-    private var cachedAltitude: String? = null
-    private var cachedGpsDate: String? = null
-    private var cachedGpsTime: String? = null
-    private var lastGpsUpdate: Long = 0
-    private val GPS_CACHE_MS = 60000 // 1 minute
+    // Cache for real device GPS — @Volatile because these are written from hook
+    // callbacks (arbitrary threads) and read from other hook callbacks.
+    @Volatile private var cachedLatitude: String? = null
+    @Volatile private var cachedLongitude: String? = null
+    @Volatile private var cachedAltitude: String? = null
+    @Volatile private var cachedGpsDate: String? = null
+    @Volatile private var cachedGpsTime: String? = null
+    @Volatile private var lastGpsUpdate: Long = 0
+    private val GPS_CACHE_MS = 60000L // 1 minute
 
     // Device info cache
     private var cachedDeviceMake: String? = null
@@ -581,9 +582,17 @@ object ExifSpoofHooks {
         try {
             val parts = coordinate.split(",")
             if (parts.size == 3) {
-                val degrees = parts[0].split("/")[0].toInt()
-                val minutes = parts[1].split("/")[0].toInt()
-                val seconds = parts[2].split("/")[0].toInt()
+                // Format is "num/denom,num/denom,num/denom" — must divide by the denominator.
+                // Previously only the numerator was used, giving ~630m position error for seconds.
+                fun parseFraction(s: String): Float {
+                    val f = s.trim().split("/")
+                    val num = f[0].toFloat()
+                    val den = f.getOrNull(1)?.toFloat()?.takeIf { it != 0f } ?: 1f
+                    return num / den
+                }
+                val degrees = parseFraction(parts[0])
+                val minutes = parseFraction(parts[1])
+                val seconds = parseFraction(parts[2])
                 return degrees + (minutes / 60.0f) + (seconds / 3600.0f)
             }
         } catch (e: Exception) {

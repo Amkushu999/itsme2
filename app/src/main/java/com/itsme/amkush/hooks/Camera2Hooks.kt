@@ -57,10 +57,19 @@ object Camera2Hooks {
      */
     val surfaceDimensions: ConcurrentHashMap<Surface, Triple<Int, Int, Int>> = ConcurrentHashMap()
 
+    /**
+     * Dimensions stored by SurfaceTexture identity from setDefaultBufferSize().
+     * When the app later calls Surface(surfaceTexture), hookSurfaceConstructor() copies
+     * the dimensions into surfaceDimensions under the real Surface object.
+     */
+    private val surfaceTextureDimensions: ConcurrentHashMap<android.graphics.SurfaceTexture, Triple<Int, Int, Int>> =
+        ConcurrentHashMap()
+
     fun hookAll(lpparam: XC_LoadPackage.LoadPackageParam) {
         try {
             hookImageReader(lpparam)
             hookSurfaceTexture(lpparam)
+            hookSurfaceConstructor(lpparam)
             hookOpenCamera(lpparam)
             hookCameraDeviceMethods(lpparam)
             hookCaptureSessionMethods(lpparam)
@@ -146,11 +155,42 @@ object Camera2Hooks {
                         val st = param.thisObject as? android.graphics.SurfaceTexture ?: return
                         val w = param.args[0] as Int
                         val h = param.args[1] as Int
-                        try {
-                            val surface = Surface(st)
-                            surfaceDimensions[surface] = Triple(w, h, ImageFormat.YUV_420_888)
-                            Logger.d("$TAG SurfaceTexture buffer size: ${w}x${h}")
-                        } catch (_: Throwable) {}
+                        // Store by SurfaceTexture identity, NOT by a new Surface(st) object.
+                        // Creating Surface(st) here produces a different object than the one
+                        // the app will pass to createCaptureSession, so a lookup by that
+                        // temporary Surface would always miss.  hookSurfaceConstructor() will
+                        // bridge the SurfaceTexture → Surface mapping when the app's own
+                        // Surface(SurfaceTexture) constructor call is intercepted.
+                        surfaceTextureDimensions[st] = Triple(w, h, ImageFormat.YUV_420_888)
+                        Logger.d("$TAG SurfaceTexture buffer size recorded: ${w}x${h}")
+                    }
+                }
+            )
+        }
+    }
+
+    /**
+     * Hook Surface(SurfaceTexture) constructor.
+     *
+     * When the app creates its own Surface backed by a SurfaceTexture whose dimensions
+     * we already recorded via setDefaultBufferSize(), we transfer those dimensions into
+     * surfaceDimensions keyed by the real Surface object.  This ensures
+     * handleSessionCreation() finds the correct resolution when the app passes this
+     * Surface to createCaptureSession().
+     */
+    private fun hookSurfaceConstructor(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val cls = tryFindClass("android.view.Surface", lpparam.classLoader) ?: return
+        safeHook {
+            XposedHelpers.findAndHookConstructor(
+                cls,
+                android.graphics.SurfaceTexture::class.java,
+                object : XC_MethodHook() {
+                    override fun afterHookedMethod(param: MethodHookParam) {
+                        val st = param.args[0] as? android.graphics.SurfaceTexture ?: return
+                        val dims = surfaceTextureDimensions[st] ?: return
+                        val surface = param.thisObject as? Surface ?: return
+                        surfaceDimensions[surface] = dims
+                        Logger.d("$TAG Surface(SurfaceTexture) tracked: ${dims.first}x${dims.second}")
                     }
                 }
             )

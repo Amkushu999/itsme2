@@ -47,6 +47,11 @@ object InjectionServiceClient {
     )
     private val pendingDeliveries: ArrayDeque<PendingDelivery> = ArrayDeque()
 
+    // Queue for hotSwap / startDecoder calls that arrive before the service connects.
+    private enum class UrlActionType { HOT_SWAP, START_DECODER }
+    private data class PendingUrlAction(val type: UrlActionType, val url: String)
+    private val pendingUrlActions: ArrayDeque<PendingUrlAction> = ArrayDeque()
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val svc = ISurfaceInjector.Stub.asInterface(binder)
@@ -127,7 +132,8 @@ object InjectionServiceClient {
 
     /**
      * Ask InjectionService to hot-swap to a new stream URL.
-     * If not yet connected, establishes the connection first.
+     * If not yet connected, queues the URL and establishes the connection.
+     * Previously the URL was silently dropped when not connected.
      */
     fun hotSwap(url: String) {
         try {
@@ -135,6 +141,9 @@ object InjectionServiceClient {
             if (inj != null) {
                 inj.hotSwap(url)
             } else {
+                synchronized(pendingUrlActions) {
+                    pendingUrlActions.addLast(PendingUrlAction(UrlActionType.HOT_SWAP, url))
+                }
                 connectToInjectionService()
             }
         } catch (e: Throwable) {
@@ -142,13 +151,17 @@ object InjectionServiceClient {
         }
     }
 
-    /** Ask InjectionService to start (or restart) the FFmpeg decoder with [url]. */
+    /** Ask InjectionService to start (or restart) the FFmpeg decoder with [url].
+     *  If not yet connected, queues the call for delivery after connection. */
     fun startDecoder(url: String) {
         try {
             val inj = injector
             if (inj != null) {
                 inj.startDecoder(url)
             } else {
+                synchronized(pendingUrlActions) {
+                    pendingUrlActions.addLast(PendingUrlAction(UrlActionType.START_DECODER, url))
+                }
                 connectToInjectionService()
             }
         } catch (e: Throwable) {
@@ -201,10 +214,29 @@ object InjectionServiceClient {
 
     private fun drainPending() {
         val inj = injector ?: return
-        synchronized(pendingDeliveries) {
-            while (pendingDeliveries.isNotEmpty()) {
-                val d = pendingDeliveries.removeFirst()
-                deliverNow(inj, d.surfaces, d.widths, d.heights, d.formats, d.fps, d.sessionId)
+
+        // Snapshot the queues under their respective locks, then release the locks
+        // BEFORE making any Binder IPC calls.  Holding a lock during IPC (which can
+        // take tens of ms) would stall any thread trying to queue a new delivery.
+        val deliveries = synchronized(pendingDeliveries) {
+            pendingDeliveries.toList().also { pendingDeliveries.clear() }
+        }
+        val urlActions = synchronized(pendingUrlActions) {
+            pendingUrlActions.toList().also { pendingUrlActions.clear() }
+        }
+
+        deliveries.forEach { d ->
+            deliverNow(inj, d.surfaces, d.widths, d.heights, d.formats, d.fps, d.sessionId)
+        }
+        urlActions.forEach { action ->
+            try {
+                when (action.type) {
+                    UrlActionType.HOT_SWAP    -> inj.hotSwap(action.url)
+                    UrlActionType.START_DECODER -> inj.startDecoder(action.url)
+                }
+                Logger.d("$TAG drained pending ${action.type}: ${action.url}")
+            } catch (e: Throwable) {
+                Logger.e("$TAG drainPending URL action failed", e)
             }
         }
     }

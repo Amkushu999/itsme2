@@ -7,6 +7,7 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
 import java.io.File
+import java.io.IOException
 import java.lang.reflect.Method
 
 object RootBypassHooks {
@@ -275,17 +276,22 @@ object RootBypassHooks {
     }
 
     private fun isRootCommand(cmd: String): Boolean {
-        val lower = cmd.lowercase()
-        return lower.contains("su") ||
+        val lower = cmd.lowercase().trim()
+        val tokens = lower.split(Regex("\\s+"))
+        // Match "su" only as a standalone token or known root paths — avoid false
+        // positives from words that merely contain "su" (e.g. "audio", "issue").
+        return tokens[0] == "su" ||
+                lower.contains("/bin/su") ||
+                lower.contains("/xbin/su") ||
                 lower.contains("magisk") ||
                 lower.contains("which su") ||
                 lower.contains("busybox") ||
                 lower.contains("whoami") ||
-                lower.contains("id") && lower.contains("uid") ||
+                lower.contains("superuser") ||
+                (tokens.contains("id") && tokens.contains("uid")) ||
                 lower.contains("mount") && lower.contains("system") ||
-                lower.contains("cat") && lower.contains("su") ||
-                lower.contains("ls") && lower.contains("/su") ||
-                lower.contains("superuser")
+                lower.contains("cat") && lower.contains("/su") ||
+                lower.contains("ls") && lower.contains("/su")
     }
 
     private fun getPackageNameFromItem(item: Any): String {
@@ -303,5 +309,4 @@ object RootBypassHooks {
     }
 }
 
-private class IOException(message: String) : Exception(message)
 private typealias StringArray = Array<String>

@@ -205,10 +205,9 @@ object IntentCaptureHooks {
             if (data.hasExtra(MediaStore.EXTRA_OUTPUT)) {
                 val outputUri = data.getParcelableExtra<Uri>(MediaStore.EXTRA_OUTPUT)
                 if (outputUri != null) {
-                    // Write the uploaded image to the output URI as JPEG
                     val outputStream = context.contentResolver.openOutputStream(outputUri)
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream!!)
-                    outputStream.close()
+                        ?: run { Logger.e("openOutputStream returned null for $outputUri"); return }
+                    outputStream.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
                     Logger.d("Replaced full image with uploaded image at: $outputUri")
                 }
                 return
@@ -218,8 +217,8 @@ object IntentCaptureHooks {
             val imageUri = data.data
             if (imageUri != null) {
                 val outputStream = context.contentResolver.openOutputStream(imageUri)
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream!!)
-                outputStream.close()
+                    ?: run { Logger.e("openOutputStream returned null for $imageUri"); return }
+                outputStream.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
                 Logger.d("Replaced image data URI with uploaded image at: $imageUri")
             }
 
@@ -250,8 +249,8 @@ object IntentCaptureHooks {
                 val outputUri = data.getParcelableExtra<Uri>(MediaStore.EXTRA_OUTPUT)
                 if (outputUri != null) {
                     val outputStream = context.contentResolver.openOutputStream(outputUri)
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream!!)
-                    outputStream.close()
+                        ?: run { Logger.e("openOutputStream returned null for $outputUri"); return }
+                    outputStream.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
                     Logger.d("Replaced full image with video frame at: $outputUri")
                 }
                 return
@@ -261,8 +260,8 @@ object IntentCaptureHooks {
             val imageUri = data.data
             if (imageUri != null) {
                 val outputStream = context.contentResolver.openOutputStream(imageUri)
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream!!)
-                outputStream.close()
+                    ?: run { Logger.e("openOutputStream returned null for $imageUri"); return }
+                outputStream.use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
                 Logger.d("Replaced image data URI with video frame at: $imageUri")
             }
 
@@ -272,24 +271,17 @@ object IntentCaptureHooks {
     }
 
     private fun extractFirstFrameFromVideo(context: Context, uri: Uri): Bitmap? {
-        try {
-            val mmr = android.media.MediaMetadataRetriever()
+        val mmr = android.media.MediaMetadataRetriever()
+        return try {
             mmr.setDataSource(context, uri)
-
-            // Extract first frame at 1 second
-            val bitmap = mmr.getFrameAtTime(1000 * 1000) // 1 second in microseconds
-
-            // If first frame fails, try at 0
-            if (bitmap == null) {
-                return mmr.getFrameAtTime(0)
-            }
-
-            mmr.release()
-            return bitmap
-
+            // Extract first frame at 1 second; fall back to frame 0 if unavailable
+            mmr.getFrameAtTime(1000L * 1000L) ?: mmr.getFrameAtTime(0)
         } catch (e: Exception) {
             Logger.e("Failed to extract video frame", e)
-            return null
+            null
+        } finally {
+            // Always release native resources regardless of success or failure
+            try { mmr.release() } catch (_: Throwable) {}
         }
     }
 
@@ -368,11 +360,15 @@ object IntentCaptureHooks {
     }
 
     private fun isImageCaptureResult(data: Intent): Boolean {
-        // Only image captures use the "data" Bitmap thumbnail extra
-        return data.hasExtra("data")
+        // Thumbnail mode ("data" extra) or full-resolution mode (EXTRA_OUTPUT) both indicate
+        // an image capture. Previously only the thumbnail case was matched, causing full-res
+        // image captures to be misrouted through isVideoCaptureResult.
+        return data.hasExtra("data") || data.hasExtra(MediaStore.EXTRA_OUTPUT)
     }
 
     private fun isVideoCaptureResult(data: Intent): Boolean {
-        return data.data != null || data.hasExtra(MediaStore.EXTRA_OUTPUT)
+        // Only match when there's a data URI but none of the image-capture extras are present.
+        // replaceVideoResult() additionally verifies the MIME type is video/* before acting.
+        return data.data != null && !data.hasExtra("data") && !data.hasExtra(MediaStore.EXTRA_OUTPUT)
     }
 }

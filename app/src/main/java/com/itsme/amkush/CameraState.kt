@@ -17,13 +17,13 @@ object CameraState {
     private val surfaceConfigs = java.util.concurrent.ConcurrentHashMap<Surface, SurfaceConfig>()
     private val allSurfaces = java.util.concurrent.CopyOnWriteArrayList<Surface>()
 
-    var camera1Instance: Any? = null
-    var camera1Holder: SurfaceHolder? = null
-    var camera2Device: Any? = null
+    @Volatile var camera1Instance: Any? = null
+    @Volatile var camera1Holder: SurfaceHolder? = null
+    @Volatile var camera2Device: Any? = null
 
-    var previewSurface: Surface? = null
-    var imageReaderSurface: Surface? = null
-    var recordingSurface: Surface? = null
+    @Volatile var previewSurface: Surface? = null
+    @Volatile var imageReaderSurface: Surface? = null
+    @Volatile var recordingSurface: Surface? = null
 
     data class SurfaceConfig(
         val format: Int,

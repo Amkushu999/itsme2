@@ -82,14 +82,21 @@ object DeviceSpoofHooks {
 
         SharedPrefs.getSpoofAndroid()?.let { spoofAndroid ->
             try {
-                val sdkInt = when (spoofAndroid.toIntOrNull()) {
-                    10 -> 29
-                    11 -> 30
-                    12 -> 31
-                    13 -> 33
-                    14 -> 34
-                    15 -> 35
-                    else -> Build.VERSION.SDK_INT
+                // Android 12L (API 32) is represented as "12L" or "12.1".
+                // Note: API 32 was previously absent, causing incorrect SDK spoofing
+                // for Android 12L devices.
+                val sdkInt = when {
+                    spoofAndroid.equals("12L", ignoreCase = true) ||
+                    spoofAndroid == "12.1" -> 32
+                    else -> when (spoofAndroid.toIntOrNull()) {
+                        10 -> 29
+                        11 -> 30
+                        12 -> 31
+                        13 -> 33
+                        14 -> 34
+                        15 -> 35
+                        else -> Build.VERSION.SDK_INT
+                    }
                 }
                 val versionClass = XposedHelpers.findClass("android.os.Build\$VERSION", lpparam.classLoader)
                 XposedHelpers.setStaticIntField(versionClass, "SDK_INT", sdkInt)
