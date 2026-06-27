@@ -94,36 +94,51 @@ static bool openStream(DecoderCtx* ctx) {
     //   reconnect*       — HTTP-family demuxers only; ignored / rejected by others
     //   analyzeduration  — safe for all: hint to limit stream-info probe time
 
-    auto startsWith = [](const std::string& s, const char* prefix) {
-        return s.rfind(prefix, 0) == 0;
-    };
-
-    const bool isRtsp  = startsWith(ctx->url, "rtsp://")  || startsWith(ctx->url, "rtsps://");
-    const bool isHttp  = startsWith(ctx->url, "http://")  || startsWith(ctx->url, "https://");
-    const bool isRtmp  = startsWith(ctx->url, "rtmp://")  || startsWith(ctx->url, "rtmps://");
-    const bool isSrt   = startsWith(ctx->url, "srt://");
-    const bool isUdp   = startsWith(ctx->url, "udp://")   || startsWith(ctx->url, "rtp://");
-
-    AVDictionary* opts = nullptr;
-
-    if (isRtsp) {
-        av_dict_set(&opts, "rtsp_transport", "tcp",     0);  // force TCP for reliability
-        av_dict_set(&opts, "stimeout",       "5000000", 0);  // 5 s socket timeout (µs)
+    // Normalise scheme to lowercase for safe comparison (some callers may uppercase).
+    // Extract scheme = everything before the first "://" (or the full string if absent).
+    std::string scheme;
+    {
+        const auto pos = ctx->url.find("://");
+        const std::string raw = (pos != std::string::npos) ? ctx->url.substr(0, pos) : ctx->url;
+        scheme.resize(raw.size());
+        for (size_t i = 0; i < raw.size(); ++i)
+            scheme[i] = static_cast<char>(::tolower(static_cast<unsigned char>(raw[i])));
     }
 
-    if (isHttp || isRtmp) {
-        av_dict_set(&opts, "timeout",            "5000000", 0);  // 5 s connect timeout
+    // Per-protocol demuxer options.
+    //
+    // avformat_open_input() passes the opts dict as private format options and
+    // REJECTS any key the selected demuxer/protocol does not recognise, which
+    // aborts the open with AVERROR_OPTION_NOT_FOUND.  Every option below is
+    // applied ONLY to the protocols that declare it:
+    //
+    //   rtsp_transport, stimeout — RTSP demuxer (libavformat/rtspdec.c)
+    //   timeout                  — HTTP / RTMP demuxers (generic TCP timeout)
+    //   reconnect*               — HTTP demuxer only (libavformat/http.c)
+    //   latency                  — SRT protocol only  (libavformat/libsrt.c)
+    //   analyzeduration,
+    //   probesize                — AVFormatContext fields; safe for all protocols
+    AVDictionary* opts = nullptr;
+
+    if (scheme == "rtsp" || scheme == "rtsps") {
+        av_dict_set(&opts, "rtsp_transport", "tcp",     0);  // force TCP, avoids UDP packet loss
+        av_dict_set(&opts, "stimeout",       "5000000", 0);  // 5 s socket timeout (µs)
+    } else if (scheme == "http" || scheme == "https") {
+        // HTTP demuxer supports all four reconnect keys and timeout.
+        av_dict_set(&opts, "timeout",            "5000000", 0);
         av_dict_set(&opts, "reconnect",          "1",       0);
         av_dict_set(&opts, "reconnect_streamed", "1",       0);
         av_dict_set(&opts, "reconnect_delay_max","5",       0);
-    }
-
-    if (isSrt || isUdp) {
-        // SRT/UDP: latency hint in ms; avoids long probe on raw UDP streams
+    } else if (scheme == "rtmp" || scheme == "rtmps") {
+        // RTMP demuxer accepts timeout but NOT the HTTP-specific reconnect keys.
+        av_dict_set(&opts, "timeout", "5000000", 0);
+    } else if (scheme == "srt") {
+        // SRT protocol accepts latency (in microseconds) to bound receive buffer.
         av_dict_set(&opts, "latency", "200000", 0);  // 200 ms
     }
+    // udp / rtp / mms / ftp / file — no private options; FFmpeg auto-detects.
 
-    // Universal: bound the stream-info probe so slow sources don't stall startup
+    // AVFormatContext-level probing bounds: safe for every demuxer.
     av_dict_set(&opts, "analyzeduration", "3000000", 0);  // 3 s max probe
     av_dict_set(&opts, "probesize",       "1000000", 0);  // 1 MB max probe data
 
