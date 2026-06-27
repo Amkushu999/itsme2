@@ -77,13 +77,55 @@ static bool openStream(DecoderCtx* ctx) {
         return false;
     }
 
+    // Build protocol-specific demuxer options.
+    //
+    // avformat_open_input() treats the opts dictionary as format private options
+    // and REJECTS any key it doesn't recognise for the detected demuxer.
+    // Unconditionally passing rtsp_transport / stimeout to an HLS or RTMP URL
+    // causes "Option rtsp_transport not found" errors and can prevent the stream
+    // from opening.  Apply each option only to the protocols that support it.
+    //
+    // Scheme detection operates on the raw URL string; all well-formed URLs
+    // (guaranteed by autoPrefixScheme() on the Kotlin side) contain "://".
+    //
+    //   rtsp_transport   — RTSP demuxer only
+    //   stimeout         — RTSP socket timeout (µs); RTSP demuxer only
+    //   timeout          — HTTP / HLS / DASH / RTMP / generic TCP timeout (µs)
+    //   reconnect*       — HTTP-family demuxers only; ignored / rejected by others
+    //   analyzeduration  — safe for all: hint to limit stream-info probe time
+
+    auto startsWith = [](const std::string& s, const char* prefix) {
+        return s.rfind(prefix, 0) == 0;
+    };
+
+    const bool isRtsp  = startsWith(ctx->url, "rtsp://")  || startsWith(ctx->url, "rtsps://");
+    const bool isHttp  = startsWith(ctx->url, "http://")  || startsWith(ctx->url, "https://");
+    const bool isRtmp  = startsWith(ctx->url, "rtmp://")  || startsWith(ctx->url, "rtmps://");
+    const bool isSrt   = startsWith(ctx->url, "srt://");
+    const bool isUdp   = startsWith(ctx->url, "udp://")   || startsWith(ctx->url, "rtp://");
+
     AVDictionary* opts = nullptr;
-    av_dict_set(&opts, "rtsp_transport",     "tcp",     0);
-    av_dict_set(&opts, "stimeout",           "5000000", 0);  // 5 s connect timeout (µs)
-    av_dict_set(&opts, "timeout",            "5000000", 0);
-    av_dict_set(&opts, "reconnect",          "1",       0);
-    av_dict_set(&opts, "reconnect_streamed", "1",       0);
-    av_dict_set(&opts, "reconnect_delay_max","5",       0);
+
+    if (isRtsp) {
+        av_dict_set(&opts, "rtsp_transport", "tcp",     0);  // force TCP for reliability
+        av_dict_set(&opts, "stimeout",       "5000000", 0);  // 5 s socket timeout (µs)
+    }
+
+    if (isHttp || isRtmp) {
+        av_dict_set(&opts, "timeout",            "5000000", 0);  // 5 s connect timeout
+        av_dict_set(&opts, "reconnect",          "1",       0);
+        av_dict_set(&opts, "reconnect_streamed", "1",       0);
+        av_dict_set(&opts, "reconnect_delay_max","5",       0);
+    }
+
+    if (isSrt || isUdp) {
+        // SRT/UDP: latency hint in ms; avoids long probe on raw UDP streams
+        av_dict_set(&opts, "latency", "200000", 0);  // 200 ms
+    }
+
+    // Universal: bound the stream-info probe so slow sources don't stall startup
+    av_dict_set(&opts, "analyzeduration", "3000000", 0);  // 3 s max probe
+    av_dict_set(&opts, "probesize",       "1000000", 0);  // 1 MB max probe data
 
     int ret = avformat_open_input(&ctx->fmtCtx, ctx->url.c_str(), nullptr, &opts);
     av_dict_free(&opts);
@@ -125,7 +167,12 @@ static bool openStream(DecoderCtx* ctx) {
         return false;
     }
 
-    avcodec_parameters_to_context(ctx->codecCtx, stream->codecpar);
+    if (avcodec_parameters_to_context(ctx->codecCtx, stream->codecpar) < 0) {
+        LOGE("avcodec_parameters_to_context failed");
+        avcodec_free_context(&ctx->codecCtx);
+        avformat_close_input(&ctx->fmtCtx);
+        return false;
+    }
     ctx->codecCtx->thread_count = 2;
     ctx->codecCtx->thread_type  = FF_THREAD_SLICE;
 

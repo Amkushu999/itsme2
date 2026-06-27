@@ -531,6 +531,24 @@ object Camera2Hooks {
             )
         }
 
+        // abortCaptures() — drain and discard all pending/in-progress captures ASAP.
+        // Apps call this during error recovery, orientation changes, or rapid mode switches.
+        // On a real CameraCaptureSessionImpl this drains the HAL capture queue natively.
+        // On a fake session there is no HAL queue — calling through would crash with
+        // IllegalStateException or SIGSEGV.  We stop the heartbeat and return cleanly.
+        safeHook {
+            XposedHelpers.findAndHookMethod(implClass, "abortCaptures",
+                object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (param.thisObject !in FakeCameraObjects.fakeCaptureSessionsMap) return
+                        param.result = null
+                        FakeCameraObjects.stopCaptureHeartbeat(param.thisObject)
+                        Logger.d("$TAG abortCaptures() — no-op on fake session, heartbeat stopped")
+                    }
+                }
+            )
+        }
+
         // stopRepeating → stop heartbeat
         safeHook {
             XposedHelpers.findAndHookMethod(implClass, "stopRepeating",
