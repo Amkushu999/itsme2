@@ -63,7 +63,10 @@ object SurfaceRouter : FFmpegDecoder.FrameCallback {
         // MUST copy from native-owned memory before this call returns.
         // AVFrame buffers are reused on the next decode cycle.
         val ySize  = width * height
-        val uvSize = ySize / 4
+        // FIX: Correct UV size for odd dimensions (was ySize / 4 which truncates)
+        val uvW    = (width + 1) / 2
+        val uvH    = (height + 1) / 2
+        val uvSize = uvW * uvH
 
         val yCopy = ByteBuffer.allocateDirect(ySize).also  { it.put(yBuf.duplicate()); it.flip() }
         val uCopy = ByteBuffer.allocateDirect(uvSize).also { it.put(uBuf.duplicate()); it.flip() }
@@ -206,15 +209,22 @@ private class SurfaceFeedThread(
             val u = frame.u.duplicate().apply { rewind() }
             val v = frame.v.duplicate().apply { rewind() }
 
+            // FIX: Calculate strides for tightly-packed I420 from FFmpegDecoder
+            val srcStrideY = frame.width
+            val srcStrideU = (frame.width + 1) / 2
+            val srcStrideV = (frame.width + 1) / 2
+
+            // FIX: Updated to 12-parameter signature with strides
             val rc = LibYuv.convertInto(
                 y, u, v,
                 frame.width, frame.height,
+                srcStrideY, srcStrideU, srcStrideV,
                 width, height,
                 format,
                 outputBuf
             )
             if (rc != 0) {
-                Logger.e("SurfaceFeed LibYuv.convertInto: rc=$rc")
+                Logger.e("SurfaceFeed LibYuv.convertInto: rc=$rc (${LibYuv.getErrorMessage(rc)})")
                 return
             }
             outputBuf.flip()
@@ -247,26 +257,65 @@ private class SurfaceFeedThread(
             ImageFormat.YUV_420_888 -> {
                 // I420 planar in outputBuf: Y block | U block | V block
                 val ySize = width * height
-                val uvSize = ySize / 4
-                fillPlane(planes[0], outputBuf, 0,               width,    height)
-                fillPlane(planes[1], outputBuf, ySize,           width / 2, height / 2)
-                fillPlane(planes[2], outputBuf, ySize + uvSize,  width / 2, height / 2)
+                // FIX: Correct UV size for odd dimensions
+                val uvW = (width + 1) / 2
+                val uvH = (height + 1) / 2
+                val uvSize = uvW * uvH
+                
+                fillPlane(planes[0], outputBuf, 0,               width, height)
+                fillPlane(planes[1], outputBuf, ySize,           uvW,   uvH)
+                fillPlane(planes[2], outputBuf, ySize + uvSize,  uvW,   uvH)
             }
             ImageFormat.NV21, 0x15 /* NV12 */ -> {
                 // Y plane then interleaved UV in outputBuf
                 val ySize = width * height
-                fillPlane(planes[0], outputBuf, 0,     width, height)
+                fillPlane(planes[0], outputBuf, 0, width, height)
+                
                 // UV plane — interleaved (pixelStride = 2)
                 val uvPlane = planes[1]
                 val uvBuf = uvPlane.buffer
                 outputBuf.position(ySize)
-                val uvData = ByteArray(outputBuf.remaining())
+                
+                // FIX: Handle odd dimensions correctly
+                val uvW = (width + 1) / 2
+                val uvH = (height + 1) / 2
+                val uvData = ByteArray(uvW * uvH * 2)
                 outputBuf.get(uvData)
-                val uvStride   = uvPlane.rowStride
+                
+                val uvStride    = uvPlane.rowStride
                 val uvPixStride = uvPlane.pixelStride
-                for (row in 0 until height / 2) {
-                    for (col in 0 until width / 2) {
-                        val srcIdx = row * (width / 2) * 2 + col * 2
+                
+                for (row in 0 until uvH) {
+                    for (col in 0 until uvW) {
+                        val srcIdx = row * uvW * 2 + col * 2
+                        val dstIdx = row * uvStride + col * uvPixStride
+                        if (srcIdx + 1 < uvData.size && dstIdx + 1 < uvBuf.capacity()) {
+                            uvBuf.put(dstIdx, uvData[srcIdx])
+                            uvBuf.put(dstIdx + 1, uvData[srcIdx + 1])
+                        }
+                    }
+                }
+            }
+            ImageFormat.NV16 -> {
+                // NV16: Y plane then interleaved UV (4:2:2 — full height)
+                val ySize = width * height
+                fillPlane(planes[0], outputBuf, 0, width, height)
+                
+                val uvPlane = planes[1]
+                val uvBuf = uvPlane.buffer
+                outputBuf.position(ySize)
+                
+                // NV16 UV: full height, half width, interleaved
+                val uvW = (width + 1) / 2
+                val uvData = ByteArray(uvW * 2 * height)
+                outputBuf.get(uvData)
+                
+                val uvStride    = uvPlane.rowStride
+                val uvPixStride = uvPlane.pixelStride
+                
+                for (row in 0 until height) {
+                    for (col in 0 until uvW) {
+                        val srcIdx = row * uvW * 2 + col * 2
                         val dstIdx = row * uvStride + col * uvPixStride
                         if (srcIdx + 1 < uvData.size && dstIdx + 1 < uvBuf.capacity()) {
                             uvBuf.put(dstIdx, uvData[srcIdx])
