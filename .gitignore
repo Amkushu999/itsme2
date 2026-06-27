@@ -1,38 +1,16 @@
-# Built application files
-*.apk
-*.ap_
-*.aab
-
-# Java class files
-*.class
-
-# Generated files
-bin/
-gen/
-out/
-build/
-.gradle/
-.idea/
+# Android / Gradle
 *.iml
-*.iws
-*.ipr
-*.swp
-*.swo
-
-# Local configuration
-local.properties
-
-# Keystore files
-*.jks
-*.keystore
-
-# OS files
+.gradle/
+/local.properties
+/.idea/
 .DS_Store
-Thumbs.db
-
-# Log files
-*.log
-
-# Python cache
-__pycache__/
-*.pyc
+/build/
+/captures
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+app/build/
+app/.cxx/

@@ -1,20 +1,15 @@
 cmake_minimum_required(VERSION 3.22.1)
 project("facegate" CXX)
 
-# ── FFmpeg + libyuv prebuilt root directories ─────────────────────────────────
+# ── FFmpeg prebuilt root directory ────────────────────────────────────────────
 #
-# Set in local.properties (recommended):
-#   ffmpeg.dir=/path/to/ffmpeg-android
-#   libyuv.dir=/path/to/libyuv-android
+# Set via local.properties:  ffmpeg.dir=/path/to/ffmpeg-android
+# Or directly via CMake:     cmake -DFFMPEG_ROOT=...
 #
-# Or pass directly via CMake args:
-#   cmake -DFFMPEG_ROOT=... -DLIBYUV_ROOT=...
-#
-# Each root must contain:
-#   ${ROOT}/android/${ANDROID_ABI}/include/
-#   ${ROOT}/android/${ANDROID_ABI}/lib/
+# The GitHub Actions workflow (k71621438-cpu/ffmpeg-builder) places each ABI
+# at output/<ABI>/lib/ and output/<ABI>/include/, so the path resolves as:
+#   ${FFMPEG_ROOT}/${ANDROID_ABI}/lib/libavformat.a  (no /android/ middle dir)
 # ─────────────────────────────────────────────────────────────────────────────
-
 if(NOT DEFINED FFMPEG_ROOT)
     if(DEFINED ENV{FFMPEG_ROOT})
         set(FFMPEG_ROOT $ENV{FFMPEG_ROOT})
@@ -24,17 +19,17 @@ if(NOT DEFINED FFMPEG_ROOT)
     endif()
 endif()
 
-if(NOT DEFINED LIBYUV_ROOT)
-    if(DEFINED ENV{LIBYUV_ROOT})
-        set(LIBYUV_ROOT $ENV{LIBYUV_ROOT})
-    else()
-        set(LIBYUV_ROOT "${CMAKE_SOURCE_DIR}/../libyuv")
-        message(WARNING "LIBYUV_ROOT not set — defaulting to ${LIBYUV_ROOT}")
-    endif()
-endif()
+# FIX: path is ${FFMPEG_ROOT}/${ABI}, NOT ${FFMPEG_ROOT}/android/${ABI}
+# The old /android/ middle segment was inserted by the previous local build
+# script but the ffmpeg-builder CI writes directly to ${ABI}/.
+set(FFMPEG_ABI_DIR "${FFMPEG_ROOT}/${ANDROID_ABI}")
 
-set(FFMPEG_ABI_DIR "${FFMPEG_ROOT}/android/${ANDROID_ABI}")
-set(LIBYUV_ABI_DIR "${LIBYUV_ROOT}/android/${ANDROID_ABI}")
+if(NOT EXISTS "${FFMPEG_ABI_DIR}/lib")
+    message(FATAL_ERROR
+        "FFmpeg libraries not found at: ${FFMPEG_ABI_DIR}/lib\n"
+        "Download prebuilts from the ffmpeg-builder workflow or set "
+        "ffmpeg.dir in local.properties.")
+endif()
 
 # ── FFmpeg prebuilt static libs ───────────────────────────────────────────────
 
@@ -45,18 +40,35 @@ foreach(_lib avformat avcodec avutil swresample swscale)
     )
 endforeach()
 
-# ── libyuv prebuilt static lib ────────────────────────────────────────────────
+# ── libyuv from source ────────────────────────────────────────────────────────
+#
+# libyuv is compiled as part of the Android build from the checked-in source.
+# No separate prebuilt step is required — this removes the libyuv.dir
+# local.properties requirement and ensures the CI can build without extra setup.
+#
+# Clone with:
+#   git clone https://chromium.googlesource.com/libyuv/libyuv.git \
+#             app/src/main/cpp/libyuv-src
+# ─────────────────────────────────────────────────────────────────────────────
+set(LIBYUV_SRC_DIR "${CMAKE_SOURCE_DIR}/libyuv-src")
 
-add_library(yuv STATIC IMPORTED)
-set_target_properties(yuv PROPERTIES
-    IMPORTED_LOCATION "${LIBYUV_ABI_DIR}/lib/libyuv.a"
-)
+if(NOT EXISTS "${LIBYUV_SRC_DIR}/include/libyuv.h")
+    message(FATAL_ERROR
+        "libyuv source not found at ${LIBYUV_SRC_DIR}/include/libyuv.h\n"
+        "Run: git clone https://chromium.googlesource.com/libyuv/libyuv.git "
+        "${LIBYUV_SRC_DIR}")
+endif()
+
+file(GLOB LIBYUV_SOURCES "${LIBYUV_SRC_DIR}/source/*.cc")
+add_library(yuv STATIC ${LIBYUV_SOURCES})
+target_include_directories(yuv PUBLIC "${LIBYUV_SRC_DIR}/include")
+target_compile_options(yuv PRIVATE -O3 -fPIC)
 
 # ── System libraries ──────────────────────────────────────────────────────────
 
-find_library(log-lib    log)
+find_library(log-lib     log)
 find_library(android-lib android)
-find_library(z-lib      z)
+find_library(z-lib       z)
 
 # ── ffmpeg_decoder.so ─────────────────────────────────────────────────────────
 
@@ -82,7 +94,7 @@ target_compile_features(ffmpeg_decoder PRIVATE cxx_std_14)
 add_library(libyuv_wrapper SHARED libyuv_wrapper.cpp)
 
 target_include_directories(libyuv_wrapper PRIVATE
-    "${LIBYUV_ABI_DIR}/include"
+    "${LIBYUV_SRC_DIR}/include"
 )
 
 target_compile_options(libyuv_wrapper PRIVATE

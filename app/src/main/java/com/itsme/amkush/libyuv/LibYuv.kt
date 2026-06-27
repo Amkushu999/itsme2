@@ -16,23 +16,28 @@ object LibYuv {
         System.loadLibrary("libyuv_wrapper")
     }
 
+    // ── Error Codes (must match C++ side exactly) ─────────────────────────────
+    const val ERR_NULL_BUFFER     = -1
+    const val ERR_UNSUPPORTED_FMT = -2
+    const val ERR_DST_TOO_SMALL   = -3
+    const val ERR_INVALID_DIMS    = -4
+    const val ERR_INVALID_STRIDE  = -5
+    const val ERR_SRC_TOO_SMALL   = -6
+    const val ERR_OOM             = -7
+
     /**
      * Scale I420 source planes to [dstW]×[dstH] and convert to [dstFmt],
      * writing the result into the pre-allocated DirectByteBuffer [dst].
      *
-     * The caller is responsible for allocating [dst] large enough via
-     * [outputSize]. Thread-safe; no internal state.
+     * Strides express the distance in bytes between the start of consecutive
+     * rows.  For tightly-packed I420 frames from ffmpeg_decoder:
+     *   srcStrideY = srcW
+     *   srcStrideU = (srcW + 1) / 2
+     *   srcStrideV = (srcW + 1) / 2
      *
-     * @param srcY    I420 Y plane (DirectByteBuffer, position=0)
-     * @param srcU    I420 U plane (DirectByteBuffer, position=0)
-     * @param srcV    I420 V plane (DirectByteBuffer, position=0)
-     * @param srcW    Source frame width
-     * @param srcH    Source frame height
-     * @param dstW    Target output width
-     * @param dstH    Target output height
-     * @param dstFmt  Android ImageFormat constant (NV21=17, YUV_420_888=35, RGBA_8888=1)
-     * @param dst     Pre-allocated DirectByteBuffer; content is replaced on success
-     * @return 0 on success, negative code on failure
+     * Thread-safe — no internal state.
+     *
+     * @return 0 on success, negative [ERR_*] code on failure.
      */
     external fun convertInto(
         srcY: ByteBuffer,
@@ -40,6 +45,9 @@ object LibYuv {
         srcV: ByteBuffer,
         srcW: Int,
         srcH: Int,
+        srcStrideY: Int,
+        srcStrideU: Int,
+        srcStrideV: Int,
         dstW: Int,
         dstH: Int,
         dstFmt: Int,
@@ -47,16 +55,45 @@ object LibYuv {
     ): Int
 
     /**
-     * Compute the required byte size for [format] at [width]×[height].
+     * Compute the exact required byte size for [format] at [width]×[height].
      * Use this to pre-allocate the [dst] buffer passed to [convertInto].
      */
-    fun outputSize(width: Int, height: Int, format: Int): Int = when (format) {
-        ImageFormat.RGBA_8888              -> width * height * 4
-        ImageFormat.RGB_565                -> width * height * 2
-        ImageFormat.NV21,
-        ImageFormat.NV16,
-        ImageFormat.YUV_420_888            -> width * height * 3 / 2
-        0x15 /* NV12 */                    -> width * height * 3 / 2
-        else                               -> width * height * 3 / 2
+    fun outputSize(width: Int, height: Int, format: Int): Int {
+        require(width > 0 && height > 0) { "Dimensions must be positive" }
+        val ySize = width * height
+        return when (format) {
+            ImageFormat.RGBA_8888  -> ySize * 4
+            ImageFormat.RGB_565    -> ySize * 2
+            ImageFormat.NV16       -> {
+                // YUV 4:2:2 — chroma subsampled horizontally only
+                val uvSize = ((width + 1) / 2) * height
+                ySize + 2 * uvSize
+            }
+            ImageFormat.NV21,
+            ImageFormat.YUV_420_888,
+            0x15 /* NV12 */        -> {
+                // YUV 4:2:0 — chroma subsampled both axes
+                val uvSize = ((width + 1) / 2) * ((height + 1) / 2)
+                ySize + 2 * uvSize
+            }
+            else                   -> {
+                val uvSize = ((width + 1) / 2) * ((height + 1) / 2)
+                ySize + 2 * uvSize
+            }
+        }
+    }
+
+    /**
+     * Translate a native error code into a human-readable string for logging.
+     */
+    fun getErrorMessage(code: Int): String = when (code) {
+        ERR_NULL_BUFFER     -> "Null DirectByteBuffer address"
+        ERR_UNSUPPORTED_FMT -> "Unsupported destination format"
+        ERR_DST_TOO_SMALL   -> "Destination buffer is too small"
+        ERR_INVALID_DIMS    -> "Invalid width/height dimensions"
+        ERR_INVALID_STRIDE  -> "Source strides are smaller than widths"
+        ERR_SRC_TOO_SMALL   -> "Source buffers are too small for declared strides"
+        ERR_OOM             -> "Out of memory (malloc failed)"
+        else                -> "Unknown native error: $code"
     }
 }
