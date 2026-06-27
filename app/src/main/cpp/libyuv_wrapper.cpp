@@ -30,11 +30,9 @@ static const int ERR_OOM             = -7;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// RAII wrapper for std::malloc to prevent memory leaks on early returns.
 struct FreeDeleter { void operator()(void* p) const { std::free(p); } };
 using ScopedMalloc = std::unique_ptr<uint8_t, FreeDeleter>;
 
-// Scale I420 → I420 using bilinear filtering.
 static int scaleI420(
     const uint8_t* srcY, int srcStrY,
     const uint8_t* srcU, int srcStrU,
@@ -51,10 +49,17 @@ static int scaleI420(
         dstW, dstH, libyuv::kFilterBilinear);
 }
 
-// Calculate exact I420 plane sizes (handles odd dimensions correctly).
+// I420 plane sizes (4:2:0)
 static void getI420Sizes(int w, int h, size_t& ySize, size_t& uvSize) {
     ySize  = static_cast<size_t>(w) * h;
     uvSize = static_cast<size_t>((w + 1) / 2) * ((h + 1) / 2);
+}
+
+// NV16 plane sizes (4:2:2 — chroma NOT subsampled vertically)
+static void getNV16Sizes(int w, int h, size_t& ySize, size_t& uvSize) {
+    ySize  = static_cast<size_t>(w) * h;
+    // UV is interleaved, half width but FULL height
+    uvSize = static_cast<size_t>((w + 1) / 2) * 2 * h;
 }
 
 // ── JNI Export ────────────────────────────────────────────────────────────────
@@ -85,7 +90,6 @@ Java_com_itsme_amkush_libyuv_LibYuv_convertInto(
         return ERR_INVALID_DIMS;
     }
 
-    // Validate source strides (allow negative for vertical flipping, per libyuv convention).
     if (std::abs(srcStrideY) < srcW ||
         std::abs(srcStrideU) < (srcW + 1) / 2 ||
         std::abs(srcStrideV) < (srcW + 1) / 2) {
@@ -95,9 +99,6 @@ Java_com_itsme_amkush_libyuv_LibYuv_convertInto(
         return ERR_INVALID_STRIDE;
     }
 
-    // Validate source buffer capacities to prevent out-of-bounds reads.
-    // Skip when any stride is negative (vertical-flip path — capacity is still correct
-    // but the pointer arithmetic flips direction, so the check would be misleading).
     const bool hasNegativeStride = (srcStrideY < 0 || srcStrideU < 0 || srcStrideV < 0);
     if (!hasNegativeStride) {
         jlong capY = env->GetDirectBufferCapacity(srcYBuf);
@@ -108,38 +109,48 @@ Java_com_itsme_amkush_libyuv_LibYuv_convertInto(
         if (capY < static_cast<jlong>(srcStrideY) * srcH  ||
             capU < static_cast<jlong>(srcStrideU) * srcHUV ||
             capV < static_cast<jlong>(srcStrideV) * srcHUV) {
-            LOGE("convertInto: source buffer(s) too small — "
-                 "capY=%lld capU=%lld capV=%lld needed=%d/%d/%d",
-                 (long long)capY, (long long)capU, (long long)capV,
-                 srcStrideY * srcH, srcStrideU * srcHUV, srcStrideV * srcHUV);
+            LOGE("convertInto: source buffer(s) too small");
             return ERR_SRC_TOO_SMALL;
         }
     }
 
-    // Output strides for packed I420/NV21/NV12 destination.
+    // Output strides
     const int dstStrY     = dstW;
     const int dstStrUV    = (dstW + 1) / 2;
-    const int dstStrUV_NV = ((dstW + 1) / 2) * 2;  // interleaved UV stride (2 bytes/pair)
+    const int dstStrUV_NV = ((dstW + 1) / 2) * 2;  // interleaved UV stride
 
     size_t ySize = 0, uvSize = 0;
-    getI420Sizes(dstW, dstH, ySize, uvSize);
-    const size_t i420Size = ySize + 2 * uvSize;
-
-    // Destination capacity check.
-    jlong dstCap = env->GetDirectBufferCapacity(dstBuf);
     size_t required = 0;
+
+    // ── Format-specific size calculation ──────────────────────────────────────
     switch (dstFmt) {
         case FMT_YUV_420_888:
         case FMT_NV21:
-        case FMT_NV12:      required = i420Size;                       break;
-        case FMT_NV16:      required = static_cast<size_t>(dstW) * dstH * 2; break;  // 4:2:2
-        case FMT_RGBA_8888: required = static_cast<size_t>(dstW) * dstH * 4; break;
-        case FMT_RGB_565:   required = static_cast<size_t>(dstW) * dstH * 2; break;
+        case FMT_NV12: {
+            getI420Sizes(dstW, dstH, ySize, uvSize);
+            required = ySize + 2 * uvSize;
+            break;
+        }
+        case FMT_NV16: {
+            // NV16 is 4:2:2 — UV plane is full height, interleaved
+            getNV16Sizes(dstW, dstH, ySize, uvSize);
+            required = ySize + uvSize;  // ySize + (width * height)
+            break;
+        }
+        case FMT_RGBA_8888:
+            required = static_cast<size_t>(dstW) * dstH * 4;
+            ySize = required;  // reuse ySize as total size for offset math
+            break;
+        case FMT_RGB_565:
+            required = static_cast<size_t>(dstW) * dstH * 2;
+            ySize = required;
+            break;
         default:
             LOGE("convertInto: unsupported format 0x%x", dstFmt);
             return ERR_UNSUPPORTED_FMT;
     }
 
+    jlong dstCap = env->GetDirectBufferCapacity(dstBuf);
     if (dstCap < static_cast<jlong>(required)) {
         LOGE("convertInto: dst buffer too small (need %zu, have %lld)",
              required, (long long)dstCap);
@@ -159,18 +170,15 @@ Java_com_itsme_amkush_libyuv_LibYuv_convertInto(
 
         if (!needsScale && srcStrideY == srcW &&
             srcStrideU == (srcW + 1) / 2 && srcStrideV == (srcW + 1) / 2) {
-            // Ultra-fast path: exact size AND already tightly packed — memcpy
             std::memcpy(dY, srcY, ySize);
             std::memcpy(dU, srcU, uvSize);
             std::memcpy(dV, srcV, uvSize);
             ret = 0;
         } else if (!needsScale) {
-            // Fast path: same size but padded rows — I420Copy strips padding
             ret = libyuv::I420Copy(
                 srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV, srcW, srcH,
                 dY, dstStrY, dU, dstStrUV, dV, dstStrUV, dstW, dstH);
         } else {
-            // Scale path: bilinear scale directly into destination planes
             ret = scaleI420(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
                             srcW, srcH,
                             dY, dstStrY, dU, dstStrUV, dV, dstStrUV,
@@ -179,39 +187,20 @@ Java_com_itsme_amkush_libyuv_LibYuv_convertInto(
         break;
     }
 
-    // ── NV21, NV12, RGBA_8888, RGB_565 ───────────────────────────────────────
+    // ── NV21, NV12 (4:2:0 interleaved) ────────────────────────────────────────
     case FMT_NV21:
-    case FMT_NV12:
-    case FMT_RGBA_8888:
-    case FMT_RGB_565: {
+    case FMT_NV12: {
         if (!needsScale) {
-            // Fast path: convert directly from source I420 to target format.
-            switch (dstFmt) {
-            case FMT_NV21:
+            if (dstFmt == FMT_NV21) {
                 ret = libyuv::I420ToNV21(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
                                          dst, dstStrY, dst + ySize, dstStrUV_NV, dstW, dstH);
-                break;
-            case FMT_NV12:
+            } else {
                 ret = libyuv::I420ToNV12(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
                                          dst, dstStrY, dst + ySize, dstStrUV_NV, dstW, dstH);
-                break;
-            case FMT_RGBA_8888:
-                // Android RGBA_8888 memory order = R,G,B,A = ABGR in libyuv naming.
-                ret = libyuv::I420ToABGR(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
-                                         dst, dstW * 4, dstW, dstH);
-                break;
-            case FMT_RGB_565:
-                ret = libyuv::I420ToRGB565(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
-                                           dst, dstW * 2, dstW, dstH);
-                break;
             }
         } else {
-            // Scale path: scale to I420 in a temporary heap buffer, then convert.
-            ScopedMalloc tmp(static_cast<uint8_t*>(std::malloc(i420Size)));
-            if (!tmp) {
-                LOGE("convertInto: malloc(%zu) failed", i420Size);
-                return ERR_OOM;
-            }
+            ScopedMalloc tmp(static_cast<uint8_t*>(std::malloc(ySize + 2 * uvSize)));
+            if (!tmp) { LOGE("malloc failed"); return ERR_OOM; }
 
             uint8_t* tmpY = tmp.get();
             uint8_t* tmpU = tmpY + ySize;
@@ -223,24 +212,105 @@ Java_com_itsme_amkush_libyuv_LibYuv_convertInto(
                             dstW, dstH);
 
             if (ret == 0) {
-                switch (dstFmt) {
-                case FMT_NV21:
+                if (dstFmt == FMT_NV21) {
                     ret = libyuv::I420ToNV21(tmpY, dstStrY, tmpU, dstStrUV, tmpV, dstStrUV,
                                              dst, dstStrY, dst + ySize, dstStrUV_NV, dstW, dstH);
-                    break;
-                case FMT_NV12:
+                } else {
                     ret = libyuv::I420ToNV12(tmpY, dstStrY, tmpU, dstStrUV, tmpV, dstStrUV,
                                              dst, dstStrY, dst + ySize, dstStrUV_NV, dstW, dstH);
-                    break;
-                case FMT_RGBA_8888:
-                    ret = libyuv::I420ToABGR(tmpY, dstStrY, tmpU, dstStrUV, tmpV, dstStrUV,
-                                             dst, dstW * 4, dstW, dstH);
-                    break;
-                case FMT_RGB_565:
-                    ret = libyuv::I420ToRGB565(tmpY, dstStrY, tmpU, dstStrUV, tmpV, dstStrUV,
-                                               dst, dstW * 2, dstW, dstH);
-                    break;
                 }
+            }
+        }
+        break;
+    }
+
+    // ── NV16 (4:2:2 interleaved — chroma NOT subsampled vertically) ───────────
+    case FMT_NV16: {
+        if (!needsScale) {
+            // Direct conversion: I420 → NV16
+            ret = libyuv::I420ToNV16(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
+                                     dst, dstStrY, dst + ySize, dstStrUV_NV, dstW, dstH);
+        } else {
+            // Scale to I420 first, then convert to NV16
+            size_t i420YSize, i420UVSize;
+            getI420Sizes(dstW, dstH, i420YSize, i420UVSize);
+            size_t i420Total = i420YSize + 2 * i420UVSize;
+
+            ScopedMalloc tmp(static_cast<uint8_t*>(std::malloc(i420Total)));
+            if (!tmp) { LOGE("malloc failed"); return ERR_OOM; }
+
+            uint8_t* tmpY = tmp.get();
+            uint8_t* tmpU = tmpY + i420YSize;
+            uint8_t* tmpV = tmpU + i420UVSize;
+
+            ret = scaleI420(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
+                            srcW, srcH,
+                            tmpY, dstStrY, tmpU, dstStrUV, tmpV, dstStrUV,
+                            dstW, dstH);
+
+            if (ret == 0) {
+                ret = libyuv::I420ToNV16(tmpY, dstStrY, tmpU, dstStrUV, tmpV, dstStrUV,
+                                         dst, dstStrY, dst + ySize, dstStrUV_NV, dstW, dstH);
+            }
+        }
+        break;
+    }
+
+    // ── RGBA_8888 ─────────────────────────────────────────────────────────────
+    case FMT_RGBA_8888: {
+        if (!needsScale) {
+            ret = libyuv::I420ToABGR(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
+                                     dst, dstW * 4, dstW, dstH);
+        } else {
+            size_t i420YSize, i420UVSize;
+            getI420Sizes(dstW, dstH, i420YSize, i420UVSize);
+            size_t i420Total = i420YSize + 2 * i420UVSize;
+
+            ScopedMalloc tmp(static_cast<uint8_t*>(std::malloc(i420Total)));
+            if (!tmp) { LOGE("malloc failed"); return ERR_OOM; }
+
+            uint8_t* tmpY = tmp.get();
+            uint8_t* tmpU = tmpY + i420YSize;
+            uint8_t* tmpV = tmpU + i420UVSize;
+
+            ret = scaleI420(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
+                            srcW, srcH,
+                            tmpY, dstStrY, tmpU, dstStrUV, tmpV, dstStrUV,
+                            dstW, dstH);
+
+            if (ret == 0) {
+                ret = libyuv::I420ToABGR(tmpY, dstStrY, tmpU, dstStrUV, tmpV, dstStrUV,
+                                         dst, dstW * 4, dstW, dstH);
+            }
+        }
+        break;
+    }
+
+    // ── RGB_565 ───────────────────────────────────────────────────────────────
+    case FMT_RGB_565: {
+        if (!needsScale) {
+            ret = libyuv::I420ToRGB565(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
+                                       dst, dstW * 2, dstW, dstH);
+        } else {
+            size_t i420YSize, i420UVSize;
+            getI420Sizes(dstW, dstH, i420YSize, i420UVSize);
+            size_t i420Total = i420YSize + 2 * i420UVSize;
+
+            ScopedMalloc tmp(static_cast<uint8_t*>(std::malloc(i420Total)));
+            if (!tmp) { LOGE("malloc failed"); return ERR_OOM; }
+
+            uint8_t* tmpY = tmp.get();
+            uint8_t* tmpU = tmpY + i420YSize;
+            uint8_t* tmpV = tmpU + i420UVSize;
+
+            ret = scaleI420(srcY, srcStrideY, srcU, srcStrideU, srcV, srcStrideV,
+                            srcW, srcH,
+                            tmpY, dstStrY, tmpU, dstStrUV, tmpV, dstStrUV,
+                            dstW, dstH);
+
+            if (ret == 0) {
+                ret = libyuv::I420ToRGB565(tmpY, dstStrY, tmpU, dstStrUV, tmpV, dstStrUV,
+                                           dst, dstW * 2, dstW, dstH);
             }
         }
         break;
