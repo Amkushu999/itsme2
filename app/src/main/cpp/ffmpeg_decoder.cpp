@@ -224,10 +224,22 @@ static void closeStream(DecoderCtx* ctx) {
 // ── Frame delivery to Kotlin ──────────────────────────────────────────────────
 
 static void fireOnFrame(JNIEnv* env, jobject cb, AVFrame* f) {
-    const int w      = f->width;
-    const int h      = f->height;
-    const int ySize  = w * h;
-    const int uvSize = ySize / 4;
+    const int w = f->width;
+    const int h = f->height;
+
+    // Use AVFrame.linesize[] for buffer sizes, NOT width*height.
+    //
+    // av_frame_get_buffer() aligns each row to the requested alignment boundary
+    // (32 bytes in our case).  For a frame whose width is not a multiple of that
+    // alignment the linesize is larger than the width (e.g. width=854 → linesize=864).
+    // Using width*height would undercount the buffer and the DirectByteBuffer view
+    // would be shorter than the actual plane, causing Kotlin to read past the window.
+    //
+    // linesize[0] = Y row stride (bytes), total Y plane = linesize[0] * h
+    // linesize[1] = U row stride,         total U plane = linesize[1] * (h/2)
+    // linesize[2] = V row stride,         total V plane = linesize[2] * (h/2)
+    const int ySize  = f->linesize[0] * h;
+    const int uvSize = f->linesize[1] * (h / 2);   // same for V (I420 is symmetric)
 
     // DirectByteBuffers view into AVFrame plane memory.
     // The Kotlin side MUST copy before returning from onFrameAvailable().
