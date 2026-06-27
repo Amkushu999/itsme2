@@ -39,21 +39,20 @@ struct DecoderCtx {
     std::atomic<bool>    hotSwapping{false};
     std::string          hotSwapUrl;
     std::mutex           swapMu;
-    jobject              callback = nullptr;  // global JNI ref
+    jobject              callback = nullptr;
 
-    // Thread-safe dimensions for getWidth()/getHeight()
     std::atomic<int>     width{0};
     std::atomic<int>     height{0};
 
     AVRational           timeBase{0, 1};
-    int                  srcFmt = -1;   // track source pixel format for SwsContext rebuild
+    int                  srcFmt = -1;
 
     AVFormatContext*     fmtCtx    = nullptr;
     AVCodecContext*      codecCtx  = nullptr;
     SwsContext*          swsCtx    = nullptr;
     int                  videoIdx  = -1;
     AVFrame*             frame     = nullptr;
-    AVFrame*             frameI420 = nullptr;  // output frame with tightly-packed buffer
+    AVFrame*             frameI420 = nullptr;
     AVPacket*            packet    = nullptr;
 
     std::thread          thread;
@@ -80,17 +79,8 @@ static void detachCurrentThread() {
 }
 
 // ── Protocol-aware demuxer options ───────────────────────────────────────────
-//
-// avformat_open_input() passes the opts dict as format private options and
-// REJECTS any key the selected demuxer does not recognise.
-// Passing rtsp_transport to an HLS/RTMP URL produces AVERROR_OPTION_NOT_FOUND
-// and aborts the open.  Apply each option ONLY to protocols that declare it.
-//
-// Scheme detection: normalise to lowercase before comparing (autoPrefixScheme
-// on the Kotlin side guarantees a "://" is present).
 
 static void buildDemuxerOpts(AVDictionary** opts, const std::string& url) {
-    // Normalise scheme to lowercase (parse everything before "://").
     std::string scheme;
     const auto sep = url.find("://");
     const std::string raw = (sep != std::string::npos) ? url.substr(0, sep) : url;
@@ -99,30 +89,21 @@ static void buildDemuxerOpts(AVDictionary** opts, const std::string& url) {
         scheme[i] = static_cast<char>(::tolower(static_cast<unsigned char>(raw[i])));
 
     if (scheme == "rtsp" || scheme == "rtsps") {
-        // RTSP demuxer (libavformat/rtspdec.c)
-        av_dict_set(opts, "rtsp_transport", "tcp",     0);   // force TCP for reliability
-        av_dict_set(opts, "stimeout",       "5000000", 0);   // 5 s socket timeout (µs)
-
+        av_dict_set(opts, "rtsp_transport", "tcp",     0);
+        av_dict_set(opts, "stimeout",       "5000000", 0);
     } else if (scheme == "http" || scheme == "https") {
-        // HTTP demuxer (libavformat/http.c) — supports all four reconnect keys
         av_dict_set(opts, "timeout",            "5000000", 0);
         av_dict_set(opts, "reconnect",          "1",       0);
         av_dict_set(opts, "reconnect_streamed", "1",       0);
         av_dict_set(opts, "reconnect_delay_max","5",       0);
-
     } else if (scheme == "rtmp" || scheme == "rtmps") {
-        // RTMP demuxer accepts timeout but NOT the HTTP reconnect keys
         av_dict_set(opts, "timeout", "5000000", 0);
-
     } else if (scheme == "srt") {
-        // SRT protocol (libavformat/libsrt.c) — latency in microseconds
-        av_dict_set(opts, "latency", "200000", 0);   // 200 ms buffer
+        av_dict_set(opts, "latency", "200000", 0);
     }
-    // udp / rtp / mms / ftp / file — no private options; FFmpeg auto-detects.
 
-    // AVFormatContext-level probe bounds: safe for every demuxer.
-    av_dict_set(opts, "analyzeduration", "3000000", 0);   // 3 s max stream-info probe
-    av_dict_set(opts, "probesize",       "1000000", 0);   // 1 MB max probe data
+    av_dict_set(opts, "analyzeduration", "3000000", 0);
+    av_dict_set(opts, "probesize",       "1000000", 0);
 }
 
 // ── Stream open / close ───────────────────────────────────────────────────────
@@ -144,7 +125,6 @@ static bool openStream(DecoderCtx* ctx) {
         char err[256];
         av_strerror(ret, err, sizeof(err));
         LOGE("avformat_open_input: %s  url=%s", err, ctx->url.c_str());
-        // avformat_open_input already freed ctx->fmtCtx on failure — just null it.
         ctx->fmtCtx = nullptr;
         return false;
     }
@@ -155,8 +135,7 @@ static bool openStream(DecoderCtx* ctx) {
         return false;
     }
 
-    ctx->videoIdx = av_find_best_stream(
-        ctx->fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    ctx->videoIdx = av_find_best_stream(ctx->fmtCtx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     if (ctx->videoIdx < 0) {
         LOGE("no video stream found");
         avformat_close_input(&ctx->fmtCtx);
@@ -178,9 +157,6 @@ static bool openStream(DecoderCtx* ctx) {
         return false;
     }
 
-    // Check return value — avcodec_parameters_to_context can fail for unknown
-    // codec parameters or allocation errors.  An unchecked failure causes
-    // avcodec_open2 to receive a corrupt context.
     if (avcodec_parameters_to_context(ctx->codecCtx, stream->codecpar) < 0) {
         LOGE("avcodec_parameters_to_context failed");
         avcodec_free_context(&ctx->codecCtx);
@@ -212,11 +188,10 @@ static bool openStream(DecoderCtx* ctx) {
         return false;
     }
 
-    // Cache thread-safe dimensions and time base.
     ctx->width.store(ctx->codecCtx->width);
     ctx->height.store(ctx->codecCtx->height);
     ctx->timeBase = stream->time_base;
-    ctx->srcFmt   = -1;   // force SwsContext rebuild on first frame
+    ctx->srcFmt   = -1;
 
     LOGI("stream opened: %dx%d  codec=%s  url=%s",
          ctx->codecCtx->width, ctx->codecCtx->height,
@@ -239,12 +214,6 @@ static void closeStream(DecoderCtx* ctx) {
 }
 
 // ── Frame delivery to Kotlin ──────────────────────────────────────────────────
-//
-// f MUST be a tightly-packed I420 frame (linesize[i] == stride for no padding),
-// as guaranteed by ensureI420() which uses av_buffer_alloc with explicit
-// linesize assignment.  With tight packing:
-//   ySize  = w * h
-//   uvSize = uvW * uvH  (where uvW = (w+1)/2, uvH = (h+1)/2)
 
 static void fireOnFrame(JNIEnv* env, jobject cb, AVFrame* f, jlong ptsUs) {
     const int w      = f->width;
@@ -279,19 +248,12 @@ static void fireOnFrame(JNIEnv* env, jobject cb, AVFrame* f, jlong ptsUs) {
 }
 
 // ── Convert decoded frame to tightly-packed I420 ─────────────────────────────
-//
-// AVFrame buffers from the decoder may be padded (linesize > width) depending
-// on the decoder and alignment requirements.  ensureI420 always produces a
-// tightly-packed buffer (linesize[i] == width for Y, uvWidth for U/V) so that
-// fireOnFrame can compute exact sizes as w*h and uvW*uvH without dealing with
-// padding.  This also removes the need to pass linesize values to Kotlin.
 
 static AVFrame* ensureI420(DecoderCtx* ctx, AVFrame* src) {
     const int w      = src->width;
     const int h      = src->height;
     const int srcFmt = src->format;
 
-    // Rebuild SwsContext only when dimensions or pixel format change.
     const bool needsRebuild = !ctx->swsCtx                   ||
                               ctx->frameI420->width  != w     ||
                               ctx->frameI420->height != h     ||
@@ -312,11 +274,6 @@ static AVFrame* ensureI420(DecoderCtx* ctx, AVFrame* src) {
             return nullptr;
         }
 
-        // Allocate a tightly-packed I420 buffer.
-        // av_frame_get_buffer pads rows to an alignment boundary (32 bytes
-        // by default), meaning linesize can be larger than width for some
-        // resolutions.  We allocate manually with exact stride = width so
-        // that fireOnFrame can use w*h and uvW*uvH directly.
         av_frame_unref(ctx->frameI420);
 
         const int uvW     = (w + 1) / 2;
@@ -336,7 +293,6 @@ static AVFrame* ensureI420(DecoderCtx* ctx, AVFrame* src) {
         ctx->frameI420->data[1] = buf->data + ySize;
         ctx->frameI420->data[2] = buf->data + ySize + uvSize;
 
-        // Set linesize to exact width — no padding.
         ctx->frameI420->linesize[0] = w;
         ctx->frameI420->linesize[1] = uvW;
         ctx->frameI420->linesize[2] = uvW;
@@ -346,7 +302,6 @@ static AVFrame* ensureI420(DecoderCtx* ctx, AVFrame* src) {
         ctx->frameI420->height = h;
         ctx->srcFmt            = srcFmt;
 
-        // Update thread-safe dimension cache.
         ctx->width.store(w);
         ctx->height.store(h);
     }
@@ -370,7 +325,6 @@ static void decodeLoop(DecoderCtx* ctx) {
 
     while (ctx->running.load()) {
 
-        // ── Hot-swap: reopen with a new URL ──────────────────────────────────
         if (ctx->hotSwapping.load()) {
             std::string newUrl;
             {
@@ -389,24 +343,24 @@ static void decodeLoop(DecoderCtx* ctx) {
             if (!ctx->running.load()) break;
         }
 
-        // ── Read packet ───────────────────────────────────────────────────────
         int ret = av_read_frame(ctx->fmtCtx, ctx->packet);
 
         if (ret == AVERROR_EOF) {
             env->CallVoidMethod(ctx->callback, g_onEof);
             if (env->ExceptionCheck()) env->ExceptionClear();
 
-            // Detect live streams (no duration, or RTSP-family schemes).
             const bool isLive =
                 (ctx->fmtCtx->duration == AV_NOPTS_VALUE) ||
-                (ctx->url.substr(0, 4) == "rtsp");
+                (ctx->url.substr(0, 4) == "rtsp") ||
+                (ctx->url.substr(0, 4) == "rtmp") ||
+                (ctx->url.substr(0, 3) == "udp") ||
+                (ctx->url.substr(0, 3) == "rtp") ||
+                (ctx->url.substr(0, 3) == "srt");
 
             if (!isLive) {
-                // File / VOD: loop back to start.
                 avformat_seek_file(ctx->fmtCtx, -1, INT64_MIN, 0, INT64_MAX, 0);
                 avcodec_flush_buffers(ctx->codecCtx);
             } else {
-                // Live stream disconnected: wait then reconnect.
                 LOGI("live stream EOF — reconnecting in 2 s");
                 std::this_thread::sleep_for(std::chrono::seconds(2));
                 closeStream(ctx);
@@ -420,7 +374,6 @@ static void decodeLoop(DecoderCtx* ctx) {
         }
 
         if (ret == AVERROR(EAGAIN)) {
-            // Demuxer not ready yet — yield and retry.
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
@@ -433,7 +386,14 @@ static void decodeLoop(DecoderCtx* ctx) {
             env->CallVoidMethod(ctx->callback, g_onError, static_cast<jint>(ret), msg);
             if (msg) env->DeleteLocalRef(msg);
             if (env->ExceptionCheck()) env->ExceptionClear();
-            break;
+            
+            closeStream(ctx);
+            while (ctx->running.load() && !openStream(ctx)) {
+                LOGE("Reconnect failed — retry in 3 s");
+                std::this_thread::sleep_for(std::chrono::seconds(3));
+            }
+            if (!ctx->running.load()) break;
+            continue;
         }
 
         if (ctx->packet->stream_index != ctx->videoIdx) {
@@ -441,13 +401,11 @@ static void decodeLoop(DecoderCtx* ctx) {
             continue;
         }
 
-        // ── Send packet to decoder ────────────────────────────────────────────
         ret = avcodec_send_packet(ctx->codecCtx, ctx->packet);
         av_packet_unref(ctx->packet);
 
         if (ret == AVERROR(EAGAIN)) {
-            // Codec input buffer full — drain first, then resend.
-            // (handled by the receive loop below; the packet is already unref'd)
+            // Codec input buffer full — drain first
         } else if (ret < 0) {
             char errBuf[256];
             av_strerror(ret, errBuf, sizeof(errBuf));
@@ -455,7 +413,6 @@ static void decodeLoop(DecoderCtx* ctx) {
             continue;
         }
 
-        // ── Drain decoded frames ──────────────────────────────────────────────
         while (ctx->running.load()) {
             ret = avcodec_receive_frame(ctx->codecCtx, ctx->frame);
             if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) break;
@@ -469,10 +426,8 @@ static void decodeLoop(DecoderCtx* ctx) {
             AVFrame* i420 = ensureI420(ctx, ctx->frame);
             if (i420) {
                 jlong ptsUs = 0;
-                if (ctx->frame->pts != AV_NOPTS_VALUE && ctx->timeBase.den > 0) {
-                    ptsUs = static_cast<jlong>(
-                        ctx->frame->pts *
-                        (1000000.0 * ctx->timeBase.num / ctx->timeBase.den));
+                if (ctx->frame->pts != AV_NOPTS_VALUE) {
+                    ptsUs = av_rescale_q(ctx->frame->pts, ctx->timeBase, {1, 1000000});
                 }
                 fireOnFrame(env, ctx->callback, i420, ptsUs);
             }
@@ -496,14 +451,16 @@ JNIEXPORT jlong JNICALL
 Java_com_itsme_amkush_ffmpeg_FFmpegDecoder_open(
     JNIEnv* env, jclass, jstring urlStr, jobject cb)
 {
-    // Cache JNI method IDs once.
     if (!g_methodsCached) {
         jclass cbClass = env->GetObjectClass(cb);
+        
+        // FIXED: Corrected JNI signature (IIJ, not IIIJ)
         g_onFrameAvailable = env->GetMethodID(
             cbClass, "onFrameAvailable",
-            "(Ljava/nio/ByteBuffer;Ljava/nio/ByteBuffer;Ljava/nio/ByteBuffer;IIIJ)V");
+            "(Ljava/nio/ByteBuffer;Ljava/nio/ByteBuffer;Ljava/nio/ByteBuffer;IIJ)V");
         g_onError = env->GetMethodID(cbClass, "onError", "(ILjava/lang/String;)V");
         g_onEof   = env->GetMethodID(cbClass, "onEof",   "()V");
+        
         env->DeleteLocalRef(cbClass);
         g_methodsCached = (g_onFrameAvailable && g_onError && g_onEof);
         if (!g_methodsCached) {
