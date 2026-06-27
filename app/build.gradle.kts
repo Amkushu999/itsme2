@@ -6,7 +6,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// ── Read local.properties (for ffmpeg.dir / libyuv.dir) ──────────────────────
+// ── Read local.properties (for ffmpeg.dir only) ──────────────────────────────
 val localProps = Properties().also { props ->
     rootProject.file("local.properties").takeIf { it.exists() }
         ?.inputStream()?.use { props.load(it) }
@@ -14,9 +14,6 @@ val localProps = Properties().also { props ->
 
 val ffmpegDir: String? = localProps.getProperty("ffmpeg.dir")
     ?: System.getenv("FFMPEG_ROOT")
-
-val libyuvDir: String? = localProps.getProperty("libyuv.dir")
-    ?: System.getenv("LIBYUV_ROOT")
 
 android {
     namespace  = "com.itsme.amkush"
@@ -43,12 +40,7 @@ android {
                     println("WARNING: ffmpeg.dir not set in local.properties.")
                     println("         Set ffmpeg.dir to your FFmpeg Android prebuilt root.")
                 }
-                if (!libyuvDir.isNullOrEmpty()) {
-                    args += "-DLIBYUV_ROOT=$libyuvDir"
-                } else {
-                    println("WARNING: libyuv.dir not set in local.properties.")
-                    println("         Set libyuv.dir to your libyuv Android prebuilt root.")
-                }
+                // REMOVED: libyuv.dir logic — libyuv is now compiled from source in CMakeLists.txt
                 if (args.isNotEmpty()) arguments(*args.toTypedArray())
             }
         }
@@ -127,9 +119,8 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-gson:2.11.0")
 
-    // FFmpegKit — retained for the module's own UI (StreamPreviewDialog).
-    // The injection pipeline uses native FFmpeg JNI (ffmpeg_decoder.so), NOT FFmpegKit.
-    implementation("com.arthenica:ffmpeg-kit-full:6.0-2")
+    // FFmpegKit — FIXED: Use JitPack mirror since Arthenica removed from Maven Central
+    implementation("com.github.arthenica:ffmpeg-kit-min:6.0-2")
 
     implementation("androidx.camera:camera-core:1.4.2")
     implementation("androidx.camera:camera-camera2:1.4.2")
